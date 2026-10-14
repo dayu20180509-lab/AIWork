@@ -409,8 +409,7 @@ L3 领域（真正的业务规则与同步）
 
 ### 3.3 L3 领域服务（核心）——具体做什么
 
-> 交互版：[L3 领域服务详解](https://cursor.com/canvas/store-3f310d1e-80b7-486b-8c4a-9718b9ab9225/l3-domain-placeholder)  
-> （Canvas 链接以仓库提交后为准；下文为完整说明。）
+> 交互版：[L3 领域服务详解](https://cursor.com/canvas/store-3f310d1e-80b7-486b-8c4a-9718b9ab9225/7e34c0c1-76ba-43b4-87b1-7a98f2b430ea)
 
 L3 是客户端的**业务内核**：UI 可以换，网络库可以换，但「赞怎么乐观更新、消息怎么补洞、发布卡在哪一步」必须有稳定实现。  
 它对外像一组 **UseCase + 可观察状态**；对内用 L4 的 HTTP/WS/DB 完成同步。
