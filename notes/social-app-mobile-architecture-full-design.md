@@ -83,7 +83,208 @@
 4. **平台无业务**：L4 禁止依赖任何 Feature / Domain 业务模型（DTO 除外可放 `contracts`）。
 5. **契约优先**：双端共享 OpenAPI / Proto、错误码表、埋点字典、深链 schema。
 
-### 2.3 仓库与工程形态
+### 2.3 五层依赖怎么设计（详解）
+
+> 分层的本质不是画框，而是规定：**谁可以 import 谁、状态存在哪、变化时改哪一层**。
+
+#### 2.3.1 设计原则
+
+| 原则 | 含义 |
+|---|---|
+| **依赖单向、稳定向下** | 上层可依赖下层；下层改动不应倒逼上层大改；下层禁止感知上层业务 |
+| **按变化原因拆层** | 因「产品交互」变的进 L2；因「业务规则/同步」变的进 L3；因「技术实现」变的进 L4/L5 |
+| **越向下越可复用、越无产品语义** | L5 换崩溃 SDK 不影响 Feed；L2 改评论 UI 不应改网络库 |
+| **允许垂直切片穿透存储** | Feed/IM 的 Domain 可直接用 L4 Storage，但对外仍只暴露 Domain API |
+| **跨层只经公开接口** | Feature 不 new OkHttp；不直接 SQL；统一走 Domain / Platform Facade |
+
+**为什么是五层而不是原图四层？**
+
+| 原图 | 问题 | 五层对应 |
+|---|---|---|
+| 业务层 | 把「页面」和「领域规则」糊在一起 | 拆成 L2 Features + L3 Domain |
+| 能力层 | 「业务无关」过强，登录/推送/图片掺业务语义 | 瘦身为 L4 Platform；语义升到 L3 |
+| 基础设施层 | 组件库与崩溃混放尚可，但缺编排入口 | L5 Infra + 顶上补 L1 AppShell |
+| 跨端层在最底 | 依赖方向倒置 | 移出依赖栈，作二期策略 |
+
+#### 2.3.2 各层职责、输入输出、禁止事项
+
+**L1 应用壳 — 编排与进程入口**
+
+| 项 | 内容 |
+|---|---|
+| **存在理由** | 多业务共存需要唯一的启动、路由、门禁、全局 UI 宿主 |
+| **拥有** | 路由表、Tab、深链分发、SessionGate、全局弹窗队列、初始化顺序 |
+| **依赖** | L2（组装页面）、L3（问登录态/未读/强更）、L4/L5（启动期 SDK） |
+| **不拥有** | Feed 分页、IM 消息序、token 刷新实现、上传算法 |
+| **典型 API** | `Navigator.open(route)` / `SessionGate.ensureLogin()` / `DeepLink.handle(uri)` |
+
+**L2 业务模块 — 产品功能的 UI 与用例编排**
+
+| 项 | 内容 |
+|---|---|
+| **存在理由** | 按用户可感知功能垂直拆分，便于并行开发与独立迭代 |
+| **拥有** | 页面、ViewModel、交互状态（输入中、列表滚动位置）、调用 Domain 的用例胶水 |
+| **依赖** | 仅 L3 接口 + L5 UI 组件；经壳跳转其他 Feature |
+| **不拥有** | 私有「全球单例网络」；不直接依赖其他 Feature 实现类 |
+| **典型 API** | `FeedViewModel.refresh()` 内部调 `FeedSync.refresh()` |
+
+一个 Feature 的标准形状：
+
+```
+feature-feed/
+  ui/          # Page, Components（组合 L5 UIKit）
+  vm/          # 订阅 Domain 流，转 UiState
+  (可选) route # 向壳注册的路由定义
+```
+
+**L3 领域服务 — 业务规则、同步、跨页面复用的真相源**
+
+| 项 | 内容 |
+|---|---|
+| **存在理由** | 社交的复杂度在「同步与规则」，不在控件；必须有稳定内核给多页复用 |
+| **拥有** | 用例、领域模型、本地投影、同步引擎、乐观更新与回滚、幂等键策略 |
+| **依赖** | L4（HTTP/WS/DB/PushChannel…）、L5（日志/DI） |
+| **不拥有** | Activity/ViewController、路由、Toast 文案细节（可抛 DomainError 由 UI 映射） |
+| **典型 API** | `FeedSync.timelineFlow` / `Conversation.sendText()` / `MediaPipeline.enqueue(draft)` |
+
+L3 是**五层里最关键的业务资产**：换 UI 框架、甚至二期上 KMP，优先复用的是这一层的契约。
+
+**L4 平台能力 — 可替换的技术能力 Facade**
+
+| 项 | 内容 |
+|---|---|
+| **存在理由** | 把 OkHttp/APNs/Coil 等易变实现藏在稳定接口后，Domain 不绑死三方库 |
+| **拥有** | `HttpClient`、`WsClient`、`KeyValue`、`SqlDriver`、`ImageLoader`、`PushChannel`、`Analytics`、`SecureStore` |
+| **依赖** | 仅 L5 + 系统 SDK / 三方库 |
+| **不拥有** | `Post`/`Message` 等业务实体；不 import feature-* / domain-* |
+| **典型 API** | `http.get(path)` / `ws.connect()` / `db.execute()` / `push.register()` |
+
+判断「该进 L3 还是 L4」：  
+若去掉社交产品、换做工具 App 仍成立 → **L4**；若包含关注流/会话/媒资发布语义 → **L3**。
+
+**L5 工程基建 — 开发期与运行期的通用底座**
+
+| 项 | 内容 |
+|---|---|
+| **存在理由** | 所有层都要用的横切工具：UI 原子、DI、日志、崩溃、性能、构建 |
+| **拥有** | Design System 原子组件、日志门面、Crash、Perf tracer、Module/DI 骨架 |
+| **依赖** | 系统与三方；**禁止**依赖 L1–L4 业务 |
+| **注意** | UI 组件库被 L1/L2 高频依赖，与 Crash 同属 L5，但对内可分子包 `:core:ui` / `:core:monitor` |
+
+#### 2.3.3 依赖允许矩阵
+
+行 = 谁发起依赖；列 = 被依赖方。`Y` = 允许，`N` = 禁止，`R` = 仅经路由/事件，不直接 import 实现。
+
+|  | L1 壳 | L2 Feature | L3 Domain | L4 Platform | L5 Infra |
+|---|---|---|---|---|---|
+| **L1 壳** | — | Y（组装） | Y | Y（启动） | Y |
+| **L2 Feature** | N（反依赖） | R（禁硬依赖） | Y | N（应经 L3） | Y（UI） |
+| **L3 Domain** | N | N | Y（领域间接口） | Y | Y |
+| **L4 Platform** | N | N | N | Y | Y |
+| **L5 Infra** | N | N | N | N | Y |
+
+补充规则：
+
+1. **L2 → L4 默认禁止**：例如 UI 里直接 `api.like(postId)` 会绕过乐观更新与落库，导致多页状态分裂。例外仅限纯展示型极薄调用，且 0→1 阶段宁可禁止。  
+2. **L2 ↔ L2**：只允许 `Navigator.open("im/chat?…")` 或订阅 L3 事件，禁止 `import ImChatActivity`。  
+3. **L3 ↔ L3**：允许 `Create` 流程调 `MediaPipeline` + `FeedSync`；用接口，避免环依赖（必要时抽 `domain-contracts`）。
+
+#### 2.3.4 一次用户操作如何穿过五层
+
+**例：在 Feed 点赞**
+
+```
+L1  已在 main/feed，无路由变化
+L2  FeedPage 点击 → FeedViewModel.onLike(postId)
+L3  FeedSync.like(postId)
+      → 乐观更新本地 DB 投影 → 通知 timelineFlow
+      → 调 L4 HttpClient.post(/v1/posts/{id}/like, idempotency_key)
+      → 失败则回滚投影并抛 DomainError
+L4  附加 token、traceId、执行请求
+L5  日志/埋点 SDK 被 L3 或 L4 调用 like_click / like_result
+L2  收集 Flow 新状态 → UI 红心与计数变化
+```
+
+**例：推送点击进入聊天**
+
+```
+L4  PushChannel 回调 payload
+L3  PushRouter 映射为 deeplink app://im/chat?session_id=
+L1  DeepLinkCenter → SessionGate（未登录则先 auth/login 并记住回跳）
+L1  Navigator.open(im/chat)
+L2  ImChatPage 订阅 Conversation.messagesFlow(sessionId)
+L3  Conversation 确保 WS/补洞后投影消息
+```
+
+**例：发布图文**
+
+```
+L1  打开 create/composer（可能经中心 Tab）
+L2  CreatePage 编辑完成 → CreateViewModel.publish(draft)
+L3  MediaPipeline 状态机：压缩(L4 ImageKit) → 直传(L4 Http) → 提交帖子
+L3  成功后 FeedSync 插入/刷新
+L2  展示进度；成功后 L1 可 navigate 回 Feed 或作者主页
+```
+
+#### 2.3.5 状态放在哪一层
+
+| 状态类型 | 放置 | 例子 |
+|---|---|---|
+| 瞬时 UI | L2 | 输入框文案、滚动 offset、键盘是否弹出 |
+| 业务真相 / 可复用 | L3 + 本地 DB | timeline 列表、会话未读、发送中消息 |
+| 会话凭证 | L3 管理，L4 SecureStore 持久化 | access/refresh token |
+| 设备/通道 | L4 | deviceId、push token 原始值 |
+| 导航栈 | L1 | 当前 Tab、返回栈、待处理深链 |
+
+原则：**同一业务事实只有一个写入口（一般在 L3）**；L2 只读投影 + 发意图。
+
+#### 2.3.6 模块目录如何体现依赖
+
+```
+app/                    # L1 组装：Application、导航宿主、路由注册
+feature/feed/           # L2
+feature/im/
+feature/create/
+feature/profile/
+feature/auth/
+domain/feed/            # L3
+domain/im/
+domain/media/
+domain/account/
+domain/relation/
+core/net/               # L4
+core/storage/
+core/push/
+core/analytics/
+core/ui/                # L5
+core/monitor/           # L5 crash/perf/log
+```
+
+Gradle / SPM 依赖边与矩阵一致：`feature-feed` → `domain-feed` → `core-net`；**不存在** `core-net` → `feature-feed`。
+
+可用 ArchUnit / 自定义 Detekt / Swift 禁令在 CI 卡反向依赖。
+
+#### 2.3.7 常见错误对照
+
+| 错误做法 | 后果 | 正确做法 |
+|---|---|---|
+| Feature 直接调 Raw HTTP | 多页状态不一致、难测 | 经 Domain |
+| Domain 弹 Toast | 领域层绑 UI，难复用 | 抛错误码，L2/L1 呈现 |
+| Platform 里写「关注流合并」 | 能力层被产品绑死 | 升到 FeedSync |
+| 壳里写消息补洞 | 壳膨胀、IM 无法单测 | Conversation 领域 |
+| Feature 互 import | 蝴蝶结依赖、无法拆包 | 壳路由 + Domain |
+| 把跨端画在 L5 之下当地基 | 一期原生也被绑跨端叙事 | 跨端作二期策略 |
+
+#### 2.3.8 和小团队怎么落地（避免过度设计）
+
+0→1 不必先建 20 个 package，但**逻辑边界要先有**：
+
+1. 物理上可先 `app` + `shared` 两模块，用**包名/文件夹**模拟五层。  
+2. 出现第二个调用方（如主页也要帖子流）时，把逻辑**下沉 L3**，不要复制。  
+3. 出现第二个技术实现（如换图片库）时，再抽 **L4 接口**。  
+4. 始终先立规则：依赖方向 + 状态归属；目录可以后拆，规则不能后补才想。
+
+### 2.4 仓库与工程形态
 
 **推荐：双原生独立工程 + 共享契约仓库**
 
