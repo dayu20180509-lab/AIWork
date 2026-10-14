@@ -407,38 +407,181 @@ L3 领域（真正的业务规则与同步）
 | `feature-im` | 会话列表、聊天页 | Conversation, PushRouter |
 | `feature-ai`（可选） | AI 会话 UI | 复用 Conversation 壳或独立 LLM Gateway |
 
-### 3.3 L3 领域服务（核心）
+### 3.3 L3 领域服务（核心）——具体做什么
 
-#### AccountSession
-- 登录、刷新 token、登出、踢下线
-- 当前用户资料缓存
-- 登录态变更事件总线
+> 交互版：[L3 领域服务详解](https://cursor.com/canvas/store-3f310d1e-80b7-486b-8c4a-9718b9ab9225/l3-domain-placeholder)  
+> （Canvas 链接以仓库提交后为准；下文为完整说明。）
 
-#### Relation
-- 关注/取关、关系状态、粉丝/关注分页
-- 主页聚合（资料 + 计数 + 关系）
+L3 是客户端的**业务内核**：UI 可以换，网络库可以换，但「赞怎么乐观更新、消息怎么补洞、发布卡在哪一步」必须有稳定实现。  
+它对外像一组 **UseCase + 可观察状态**；对内用 L4 的 HTTP/WS/DB 完成同步。
 
-#### FeedSync
-- Timeline 拉取（cursor）、本地缓存、去重
-- 互动：赞、评、删评（乐观更新 + 失败回滚）
-- 与 Media 协作展示封面/原图 URL
+#### 3.3.1 L3 日常在干的五类事
 
-#### Conversation（IM）
-- 会话列表、消息收发、本地消息序、发送状态机
-- 未读计数、会话草稿
-- 通过 WS/长连接收推，HTTP 补历史与补洞
+| 类别 | 具体工作 | 例子 |
+|---|---|---|
+| **1. 业务规则** | 校验、权限、可不可做、如何合并数据 | 已赞不可再赞；取关后主页按钮态；消息按 seq 排序 |
+| **2. 同步** | 与服务端对齐本地数据 | Feed 拉 cursor；IM 收推 + 补洞；登录后 warm 缓存 |
+| **3. 本地真相源** | 多页面读同一份投影 | Feed Tab 与帖子详情共享同一 `postId` 赞数 |
+| **4. 写路径编排** | 乐观更新 → 请求 → 确认/回滚 | 点赞、发消息、发帖 |
+| **5. 跨页面事件** | 通知壳或其他 Domain | 登录成功、未读变化、强制下线 |
 
-#### MediaPipeline
-- 选图 → 压缩/转码 → 直传凭证 → 分片/整传 → 提交 contentId
-- 发布任务队列（可后台续传，受系统限制）
-- 失败重试、进度回调
+**一句话：** L2 负责「看起来怎样」；L3 负责「数据怎样才算对」。
 
-#### PushRouter
-- 将推送 payload 映射为 DeepLink / 未读增量
-- 与 Conversation、Feed 的未读模型对齐
+#### 3.3.2 标准内部结构（每个 Domain 包）
 
-#### ConfigGate
-- 功能开关、灰度、强制更新、文案/CDN 域名热更新
+```
+domain-feed/
+  api/          # 对外协议：FeedSync（给 Feature 用）
+  model/        # Post, TimelinePage, LikeState…
+  usecase/      # RefreshTimeline, LikePost, AddComment
+  sync/         # 拉取、去重、合并、补洞策略
+  store/        # 本地 DB/内存投影（唯一写入点）
+  remote/       # 调 L4 Http，把 DTO → Domain Model
+```
+
+Feature **只依赖 `api/`**；不碰 `store/` 与 `remote/`。
+
+#### 3.3.3 各 Domain 清单（职责 / 状态 / API / 不做）
+
+##### A. AccountSession — 账号会话
+
+| | 内容 |
+|---|---|
+| **解决什么** | 全 App「我是谁、登没登、token 是否有效」 |
+| **持有状态** | `authState`（LoggedOut / LoggedIn / Refreshing）；当前 `UserProfile` 缓存 |
+| **关键动作** | `login` / `logout` / `refreshToken`(单飞) / `restoreFromSecureStore` / `onSessionRevoked` |
+| **对外流** | `authStateFlow`、`currentUserFlow` |
+| **协作** | 登录成功后通知壳；触发 `FeedSync.warm`、`Conversation.connect`；token 给 L4 拦截器读 |
+| **不做** | 登录页 UI、短信验证码控件、路由跳转 |
+
+##### B. Relation — 社交关系
+
+| | 内容 |
+|---|---|
+| **解决什么** | 关注图与主页聚合，避免 Feed/Profile 各写一套关注逻辑 |
+| **持有状态** | `relationMap[userId]`（none/following/followedBy/friends）；关注/粉丝列表分页锚点 |
+| **关键动作** | `follow` / `unfollow` / `loadFollowers` / `loadFollowing` / `getProfileBundle(userId)` |
+| **对外流** | `observeRelation(userId)`、`profileBundleFlow` |
+| **业务规则** | 乐观改按钮态；失败回滚；不能关注自己；计数与关系一致更新 |
+| **不做** | 主页 RecycleView、头像裁剪 UI |
+
+##### C. FeedSync — 信息流同步（重）
+
+| | 内容 |
+|---|---|
+| **解决什么** | 「关注流里有什么、赞评数多少」的唯一真相，供 Feed/详情/主页动态复用 |
+| **持有状态** | timeline 有序列表、`Post` 实体表、评论缓存、pagination cursor、刷新中标记 |
+| **关键动作** | `warm` / `refresh` / `loadMore` / `like` / `unlike` / `addComment` / `deleteComment` / `getPost(id)` |
+| **对外流** | `timelineFlow`、`postFlow(id)`、`commentsFlow(postId)` |
+| **同步规则** | cursor 分页；按 `postId` 去重；同 id 取较新 `updatedAt`；先出缓存再刷新 |
+| **写路径** | 赞：本地 `liked=true, count+1` → API → 失败回滚；评论：pending 占位 → 成功换真 id |
+| **不做** | 列表动画、下拉刷新控件样式；推荐算法（在服务端） |
+
+##### D. Conversation — IM 会话与消息（最重）
+
+| | 内容 |
+|---|---|
+| **解决什么** | 单聊消息可靠送达与本地序，会话列表与未读 |
+| **持有状态** | sessions、messages（按 `sessionId+seq`）、发送状态、unread、草稿 |
+| **关键动作** | `syncSessions` / `openSession` / `sendText` / `sendImage` / `markRead` / `loadHistory` / `onWsPush` |
+| **对外流** | `sessionsFlow`、`messagesFlow(sessionId)`、`totalUnreadFlow` |
+| **同步规则** | 发送带 `clientMsgId`；ack 后写 `serverMsgId/seq`；收推校验 seq，缺口 HTTP 补洞；断线重连后拉增量 |
+| **发送状态机** | `sending → sent → (可选 delivered/read)`；失败 `failed` 可重试 |
+| **不做** | 聊天气泡 UI、输入栏；音视频通话信令（后置） |
+
+##### E. MediaPipeline — 媒资与发布管道
+
+| | 内容 |
+|---|---|
+| **解决什么** | 从本地文件到「可引用的 mediaId / 已发帖」的可靠任务，而不是页面里写死上传 |
+| **持有状态** | 发布任务队列：进度、当前步骤、失败原因、可重试标记 |
+| **关键动作** | `enqueueImagePost(draft)` / `retry(taskId)` / `cancel` / `observeTask(taskId)` |
+| **步骤编排** | Preparing(压缩) → Uploading(直传) → Submitting(发帖 API) → Success |
+| **业务规则** | 并发上传上限；弱网重试次数；违规类错误不可自动重试；成功回调 `FeedSync` 插入 |
+| **不做** | 相机页、滤镜 UI（L2）；底层 multipart 细节可沉 L4，但状态机在 L3 |
+
+##### F. PushRouter — 推送业务路由
+
+| | 内容 |
+|---|---|
+| **解决什么** | 厂商推送 payload → 未读增量 / 深链；与 IM/Feed 模型对齐 |
+| **持有状态** | 无长期业务库；可有短时去重（同一 pushId） |
+| **关键动作** | `onPushReceived` / `onPushClicked` → 输出 `DeepLink` + 调 `Conversation` 增未读 |
+| **不做** | APNs/FCM 注册（L4）；`Navigator` 跳转（L1 消费深链） |
+
+##### G. ConfigGate — 远程配置门面
+
+| | 内容 |
+|---|---|
+| **解决什么** | 功能开关、强更、CDN/文案热更新，带本地兜底 |
+| **持有状态** | 内存 + 磁盘配置快照、`forceUpdate`、开关 map |
+| **关键动作** | `fetch` / `isEnabled(key)` / `observe` |
+| **不做** | 具体 Tab 显隐 UI（壳根据开关改 IA） |
+
+#### 3.3.4 「本地真相源」怎么工作
+
+```
+        ┌──────────── L2 FeedPage ────────────┐
+        │  collect timelineFlow                │
+        └────────────────┬─────────────────────┘
+                         │ 只读
+        ┌────────────────▼─────────────────────┐
+        │           L3 FeedSync.store           │
+        │   posts 表 + timeline 序 + cursor     │
+        │   ★ 唯一允许 write 的地方             │
+        └──────┬────────────────────▲──────────┘
+          读/写│                    │ 写入合并
+        ┌──────▼────────┐    ┌──────┴──────────┐
+        │ L4 SQLite     │    │ L4 Http / 推送   │
+        └───────────────┘    └─────────────────┘
+
+        ┌──────────── L2 PostDetail ───────────┐
+        │  collect postFlow(same postId)       │  ← 与 Feed 看到同一赞数
+        └──────────────────────────────────────┘
+```
+
+若详情页自己请求并只改自己的 VM 状态，Feed 列表不会更新——这就是 L3 存在的直接原因。
+
+#### 3.3.5 写路径标准模板（所有 Domain 通用）
+
+```
+1. 校验（规则）        能否赞 / 能否发 / 是否登录
+2. 乐观写入 store      UI 立即有反馈
+3. 调 remote（L4）     带 idempotency / clientMsgId
+4a. 成功               用服务端权威字段 patch store
+4b. 失败               回滚乐观写入，抛 DomainError(code)
+5. Feature 映射错误    Toast / 按钮恢复 / 跳转登录
+```
+
+#### 3.3.6 L3 与 L2 / L4 的分工对照
+
+| 场景 | L2 | L3 | L4 |
+|---|---|---|---|
+| 下拉刷新 | 触发 `refresh()`，转圈 | 拉 cursor、合并去重、更新 Flow | 执行 GET |
+| 点赞 | 点红心动画可本地先播 | 改 liked/count、回滚、幂等 | POST |
+| 进聊天 | 展示气泡列表 | 维护 seq、补洞、未读 | WS/HTTP/DB |
+| 发帖 | 选图、进度条 UI | 任务状态机、重试策略 | 上传字节、文件 IO |
+| 推送 | — | payload→深链/未读 | 系统推送通道 |
+
+#### 3.3.7 为什么叫「核心资产」
+
+1. **产品正确性**在这里：丢消息、赞数乱、重复帖，都是 L3 没做好。  
+2. **多入口复用**在这里：Feed / 详情 / 主页 / 推送 读同一投影。  
+3. **可测试**在这里：不启 UI 也能测补洞、乐观回滚。  
+4. **二期复用**在这里：若上 KMP，优先搬 Domain，而不是搬 Activity。  
+5. **换技术不影响业务**：换 OkHttp → Ktor 只动 L4；L3 用例保留。
+
+#### 3.3.8 一期实现优先级
+
+| 优先级 | Domain | 说明 |
+|---|---|---|
+| P0 | AccountSession | 无会话则无一切 |
+| P0 | FeedSync | MVP 消费侧 |
+| P0 | MediaPipeline（图文） | MVP 生产侧 |
+| P0 | Conversation（文本+图） | MVP 私信 |
+| P0 | Relation | 关注闭环 |
+| P1 | PushRouter / ConfigGate | 可先薄实现 |
+| P2 | Media 视频 / IM 群聊等 | 后置 |
 
 ### 3.4 L4 平台能力
 
