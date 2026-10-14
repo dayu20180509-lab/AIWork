@@ -1,13 +1,18 @@
 # 社交 App 移动端架构（0→1）
 
-完整评审与分层改法见：[notes/social-app-mobile-architecture.md](../../notes/social-app-mobile-architecture.md)。
+## 文档索引
+
+| 文档 | 用途 |
+|---|---|
+| [完整设计方案](../../notes/social-app-mobile-architecture-full-design.md) | **主文档**：目标、分层、模块、核心链路、选型、分期、ADR |
+| [分层评审](../../notes/social-app-mobile-architecture.md) | 对原四层图的问题清单与修正原则 |
 
 ## 结论摘要
 
 - 原「业务 / 能力 / 基建 / 跨端」图：**分层思维可用，结构需修正**
-- 必改：增加**领域服务层**；跨端改为**二期策略**（勿作依赖地基）
-- 一期：双端原生 + 共享 API 契约；Feed/IM 按同步系统建设
-- 二期：RN 与 KMP **择一为主**，避免与 SwiftUI 三线并行
+- 完整方案采用五层依赖栈 + 跨端作二期策略
+- 一期：双端原生 + 共享契约；Feed/IM 按同步系统建设
+- 二期：RN 与 KMP **择一为主**
 
 ## 建议依赖栈
 

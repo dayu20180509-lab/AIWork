@@ -15,6 +15,8 @@
 
 交互版评审见 Cursor Canvas：[社交 App 移动端分层架构评审](https://cursor.com/canvas/store-3f310d1e-80b7-486b-8c4a-9718b9ab9225/5b695fcf-10c0-44d2-a556-f07dc92768a8)。
 
+**完整设计方案（推荐阅读）：** [social-app-mobile-architecture-full-design.md](./social-app-mobile-architecture-full-design.md)
+
 ---
 
 ## 原设计好在哪里

@@ -38,7 +38,8 @@ AIWork/
 ├── prompts/            # prompt 模板集合
 ├── snippets/           # 可复用代码片段
 ├── notes/              # 学习笔记 / 调研记录
-│   └── social-app-mobile-architecture.md  # 社交 App 移动端分层评审
+│   ├── social-app-mobile-architecture.md       # 分层评审
+│   └── social-app-mobile-architecture-full-design.md  # 完整设计方案
 ├── docs/architecture/  # 架构摘要（链到 notes 全文）
 └── templates/          # 项目/脚本模板
 ```
