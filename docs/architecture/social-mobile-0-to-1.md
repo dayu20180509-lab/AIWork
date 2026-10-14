@@ -4,7 +4,7 @@
 
 | 文档 | 用途 |
 |---|---|
-| [完整设计方案](../../notes/social-app-mobile-architecture-full-design.md) | **主文档**：目标、分层、模块、核心链路、选型、分期、ADR |
+| [完整设计方案](../../notes/social-app-mobile-architecture-full-design.md) | **主文档**：目标、分层、模块、核心链路、选型、分期、ADR（含 §2.3 五层依赖详解） |
 | [分层评审](../../notes/social-app-mobile-architecture.md) | 对原四层图的问题清单与修正原则 |
 
 ## 结论摘要
