@@ -33,11 +33,16 @@ AIWork/
 │   ├── setup.md
 │   ├── usage.md
 │   ├── conventions.md
-│   └── tools.md
+│   ├── tools.md
+│   └── learning/       # 学习路径入口
+│       ├── go-ai-client-service.md
+│       └── go-python-ai-client-service.md
 ├── experiments/        # 实验代码(各自独立子目录)
 ├── prompts/            # prompt 模板集合
 ├── snippets/           # 可复用代码片段
 ├── notes/              # 学习笔记 / 调研记录
+│   ├── go-ai-and-client-service-learning.md         # 纯 Go 版
+│   └── go-python-ai-client-service-learning.md      # Go+按需 Python 联合版（推荐）
 └── templates/          # 项目/脚本模板
 ```
 
