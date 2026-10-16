@@ -1,7 +1,9 @@
 # 基于 Go 做 AI 调用服务 + 客户端服务：知识体系与学习指南
 
 > 目标读者：要从 0 搭「面向 App 的后端」和「AI 调用中台/服务」的工程师。  
-> 产出形态：两套可协作的 Go 服务——**Client API（客户端服务）** 与 **AI Gateway / AI Worker（AI 调用服务）**。  
+> 产出形态：两套可协作的 Go 服务——**Client API（客户端服务）** 与 **AI Gateway（AI 调用服务）**。  
+> **若 AI 需要 Python 处理（RAG/解析/Agent）：请改读联合版主文档**  
+> → [go-python-ai-client-service-learning.md](./go-python-ai-client-service-learning.md)  
 > 关联：社交 App 移动端分层见同仓库架构笔记（若已合并）。  
 > 交互版学习路径：[Go AI与客户端服务学习路径](https://cursor.com/canvas/store-3f310d1e-80b7-486b-8c4a-9718b9ab9225/93ac882e-733e-4a30-82a5-ad100a4810c3)。
 

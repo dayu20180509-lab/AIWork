@@ -1,6 +1,10 @@
 # Go：AI 调用服务 + 客户端服务学习入口
 
-完整知识文档：
+**若涉及 Python AI 处理，请看联合版（推荐）：**
+
+→ [go-python-ai-client-service.md](./go-python-ai-client-service.md)
+
+纯 Go 完整知识文档：
 
 → [notes/go-ai-and-client-service-learning.md](../../notes/go-ai-and-client-service-learning.md)
 
