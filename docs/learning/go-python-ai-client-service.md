@@ -4,6 +4,10 @@
 
 → [notes/go-python-ai-client-service-learning.md](../../notes/go-python-ai-client-service-learning.md)
 
+**交互版：**
+
+→ [Go+Python AI与客户端服务学习](https://cursor.com/canvas/store-3f310d1e-80b7-486b-8c4a-9718b9ab9225/a314172c-5b60-40e1-aada-78029b8c16a1)
+
 **纯 Go 补充（Gateway/Client 细节）：**
 
 → [notes/go-ai-and-client-service-learning.md](../../notes/go-ai-and-client-service-learning.md)
