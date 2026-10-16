@@ -4,6 +4,10 @@
 
 → [notes/go-ai-and-client-service-learning.md](../../notes/go-ai-and-client-service-learning.md)
 
+交互版：
+
+→ [Go AI与客户端服务学习路径](https://cursor.com/canvas/store-3f310d1e-80b7-486b-8c4a-9718b9ab9225/93ac882e-733e-4a30-82a5-ad100a4810c3)
+
 ## 学什么（一句话）
 
 - **Client API（Go）**：App 直连的鉴权、业务 API、BFF、实时与 AI 门面  
