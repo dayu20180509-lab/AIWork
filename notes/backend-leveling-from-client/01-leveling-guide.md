@@ -93,12 +93,14 @@
 
    《练级攻略》偏 Java 作为工业级主语言；**客户端转后端可优先 Go 或 Kotlin**，降低心智切换成本，同时保持服务端就业面。
 
-3. **最小后端栈**  
-   - Web 框架 + 路由  
-   - 配置（环境变量）  
-   - 结构化日志  
-   - 健康检查 `GET /healthz`  
-   - Docker 一键跑起来
+3. **最小后端栈**（详解见 [03-minimal-backend-stack.md](./03-minimal-backend-stack.md)）  
+   - **Web 框架 + 路由**：Method+Path → Handler；中间件链 ≈ 客户端拦截器；统一 JSON 错误  
+   - **配置（环境变量）**：同一镜像多环境；密钥不进 git；必填项缺失则启动失败  
+   - **结构化日志**：一行一条 JSON；必带 `request_id` / method / path / status / latency  
+   - **健康检查 `GET /healthz`**：给负载均衡/K8s 探活；L1+ 再拆 liveness / readiness  
+   - **Docker 一键跑起来**：多阶段构建 + Compose；新机器只装 Docker 也能通探活  
+
+   验收口令：任意装了 Docker 的机器上，只改环境变量、不改代码，服务能起来并证明活着。
 
 ### 实践项目 A：个人书签 / 待办 API
 

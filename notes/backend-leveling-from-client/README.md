@@ -8,6 +8,7 @@
 |------|------|
 | [01-leveling-guide.md](./01-leveling-guide.md) | 后端开发练级路线（L0→L5）+ 专栏对照 + 实践项目 |
 | [02-interview-qa.md](./02-interview-qa.md) | 后端面试题与参考答案（按主题分层） |
+| [03-minimal-backend-stack.md](./03-minimal-backend-stack.md) | L0 最小后端栈详解（路由/配置/日志/探活/Docker） |
 
 ## 适合谁
 
