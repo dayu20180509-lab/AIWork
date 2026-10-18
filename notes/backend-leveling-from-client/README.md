@@ -14,6 +14,7 @@
 | [06-l2-professional-fundamentals.md](./06-l2-professional-fundamentals.md) | L2 专业基础（网络/数据结构/缓存/项目 C） |
 | [07-l3-design-and-paradigms.md](./07-l3-design-and-paradigms.md) | L3 软件设计与编程范式（原则/分层/错误/重构） |
 | [08-l4-distributed-resilience-performance.md](./08-l4-distributed-resilience-performance.md) | L4 分布式、弹力与性能（秒杀/演练） |
+| [09-l5-architecture-and-growth.md](./09-l5-architecture-and-growth.md) | L5 架构进阶与高手成长（微服务/SLO/设计文档） |
 
 ## 适合谁
 
