@@ -218,6 +218,9 @@ services:
 
 ## 3. 关系数据库入门
 
+> 四块详解（主键/唯一/外键/软删、索引与 EXPLAIN、事务、迁移工具）见  
+> [05-relational-db-basics.md](./05-relational-db-basics.md)。
+
 对齐专栏 080：先把**单库用正确**，再谈分库。
 
 ### 3.1 表设计基础

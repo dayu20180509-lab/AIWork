@@ -147,6 +147,8 @@
 
 ### 4.3 关系数据库入门
 
+> 详解：[05-relational-db-basics.md](./05-relational-db-basics.md)
+
 - 表设计：主键、唯一约束、外键策略、软删除  
 - 索引：B+Tree 直觉、最左前缀、覆盖索引；列表接口上线前跑 `EXPLAIN`  
 - 事务：ACID、隔离级别；写路径显式事务，事务内禁止调外部 HTTP  
