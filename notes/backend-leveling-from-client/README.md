@@ -11,6 +11,7 @@
 | [03-minimal-backend-stack.md](./03-minimal-backend-stack.md) | L0 最小后端栈详解（路由/配置/日志/探活/Docker） |
 | [04-l1-entry-and-craft.md](./04-l1-entry-and-craft.md) | L1 后端入门与修养详解（规范/工具链/SQL/项目 B） |
 | [05-relational-db-basics.md](./05-relational-db-basics.md) | L1 关系数据库基础（表设计/索引/事务/迁移） |
+| [06-l2-professional-fundamentals.md](./06-l2-professional-fundamentals.md) | L2 专业基础（网络/数据结构/缓存/项目 C） |
 
 ## 适合谁
 
