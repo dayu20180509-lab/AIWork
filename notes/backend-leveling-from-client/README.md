@@ -13,6 +13,7 @@
 | [05-relational-db-basics.md](./05-relational-db-basics.md) | L1 关系数据库基础（表设计/索引/事务/迁移） |
 | [06-l2-professional-fundamentals.md](./06-l2-professional-fundamentals.md) | L2 专业基础（网络/数据结构/缓存/项目 C） |
 | [07-l3-design-and-paradigms.md](./07-l3-design-and-paradigms.md) | L3 软件设计与编程范式（原则/分层/错误/重构） |
+| [08-l4-distributed-resilience-performance.md](./08-l4-distributed-resilience-performance.md) | L4 分布式、弹力与性能（秒杀/演练） |
 
 ## 适合谁
 
