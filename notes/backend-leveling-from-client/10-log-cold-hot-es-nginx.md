@@ -1,8 +1,8 @@
-# 日志冷热架构：大文件 + ES 回填 + Nginx 限流
+# 日志冷热架构：大文件 + ES 查询 + Nginx 限流
 
-> 场景：日志已写入**大文件系统（只写追加）**；前端按 **logId** 点查（先 ES 后回源回填）；另支持按 **userId + 时间范围** 列表检索，时间跨度大时要**分页**。  
-> 后台 API 以 **Node.js** 实现为例。  
-> 本文合并：点查冷热、列表分页、并发写、ES 慢查询、过期、Nginx、Node.js 难点。
+> **主查询路径**：前端按 **userId + 时间范围** 捞日志，并可叠加条件（如 `category=network` 网络日志、level、path 等），时间长则**分页**。  
+> **详情路径**：列表点进某条后，用 **logId** 取全文（ES 有则直接用，没有再回源大文件并回填）。  
+> 后台 API 以 **Node.js** 为例。本文含：整体查询链路、条件筛选、分页、点查回填、Nginx、Node 难点。
 
 ---
 
@@ -10,46 +10,81 @@
 
 | 层 | 角色 |
 |----|------|
-| 大文件系统 | **真相源**，只写（追加），按 logId 可读 |
-| Elasticsearch | **热层 / 检索加速**，可丢可重建，带过期 |
-| API 服务 | Cache-Aside：先 ES → miss 回源 → 回填 |
-| Nginx | 入口 TLS、路由、**限流与连接保护** |
+| 大文件系统 | **原文真相源**，只写追加；按 **logId** 随机读全文 |
+| Elasticsearch | **检索主入口**：按 userId、时间、类别等过滤 + 分页；存摘要/部分字段，可 ILM 过期 |
+| API 服务 | **列表走 ES search**；**详情走 ES get，miss 再回源文件回填** |
+| Nginx | TLS、路由、多用户/查询接口限流 |
 
 ```text
-多用户浏览器
-    → Nginx（限流 / 连接 / 路由）
-    → Log Query API
-         ├─ GET /logs/{logId}          点查：ES → miss 回源文件 → 回填
-         └─ GET /logs?userId&from&to   列表：ES search + 游标分页
+前端控制台
+    → Nginx
+    → Log Query API（Node.js）
+         │
+         │ ① 主路径：条件列表查询
+         ├─ GET /api/logs?userId&from&to&category=network&level&...&cursor=
+         │     → 鉴权 → 拼 ES bool filter → search_after 分页
+         │     → 返回摘要列表（logId, ts, category, preview...）
+         │
+         │ ② 详情路径：点开某一条
+         └─ GET /api/logs/{logId}
+               → ES.get(logId)
+                    hit  → 返回（或摘要+fileUri 再拉全文）
+                    miss → 大文件系统.get(logId) → 回填 ES → 返回
 ```
 
-原则：ES 挂了点查仍应能回源返回；回填失败不能吞掉文件内容。  
-列表检索以 **ES 已索引文档** 为主（冷存全量扫文件不适合按用户+时间检索）；未进 ES 的冷数据靠扩大热保留或离线任务回填。
+### 1.1 主从关系（务必记清）
+
+| 能力 | 靠谁 | 说明 |
+|------|------|------|
+| 按 userId + 时间 + 条件筛选 | **ES** | 冷文件无法高效「按用户扫」 |
+| 分页翻页 | **ES search_after** | 见第 5 节 |
+| 单条全文 | ES 或 **大文件** | 列表先出摘要；详情可回源 |
+| 写入管线 | 上报/MQ → 文件存原文 + **异步索引进 ES** | 仅点查回填撑不住列表 |
+
+原则：
+
+- 列表/筛选 **不以 logId 为入口**，以 **userId + 时间（必选）+ 业务条件（可选）** 为入口。  
+- logId 是结果里的主键，用于详情与回源。  
+- ES 挂掉时：列表降级（失败提示）；详情仍可尝试直读文件（若调用方已知 logId）。
 
 ---
 
-## 2. 读路径：接口要做的事
+## 2. 整体日志查询链路（端到端）
+
+### 2.1 写入（查询的前提）
+
+```text
+客户端/业务上报
+  → 接入服务（鉴权、限流、batchId 幂等）
+  → 原文写入大文件系统（key=logId）
+  → 异步：抽取索引字段写入 ES
+       userId, ts, logId, category, level, path, statusCode, msgPreview, fileUri...
+```
+
+没有「索引字段进 ES」，后面所有筛选/分页都做不了。
+
+### 2.2 查询（控制台用法）
+
+```text
+1. 用户选时间范围（必选）+ 默认带当前 userId（或管理员选用户）
+2. 可选筛：日志类型/category（network）、level、URL path、statusCode、关键字…
+3. 点「查询」→ 列表 API 第一页
+4. 滚动/下一页 → 带同一筛选条件 + cursor
+5. 点某一行 → 详情 API（logId）拉全文
+```
+
+### 2.3 详情读路径（logId，辅路径）
 
 ```text
 GET /api/logs/{logId}
 
-1. 鉴权授权（谁能看这条日志）
-2. 参数校验（logId 格式）
-3. ES 点查（优先 GET _doc/{logId}，可加 routing）
-4. hit 且未逻辑过期 → 返回
-5. miss →
-     a. 互斥 / singleflight（见第 3 节）
-     b. 调大文件系统读原文（超时预算）
-     c. 不存在 → 404（可短负缓存防穿透）
-     d. 规范化、脱敏、裁剪 _source
-     e. 幂等写入 ES（_id=logId）
-6. 返回正文；打点 hit/miss、回源 RT、ES 写失败
+1. 鉴权（该 log 是否属于可访问用户）
+2. ES 点查
+3. hit → 返回；若只有摘要则按 fileUri 读文件拼全文
+4. miss → singleflight/锁 → 文件服务 → 回填 ES → 返回
 ```
 
-可选：
-
-- 先返回文件内容，**异步**回填 ES（降首包延迟）  
-- 极热 logId 再加一层 Redis 短缓存  
+可选：异步回填；极热 logId 短缓存。并发见第 3 节。
 
 ---
 
@@ -84,65 +119,91 @@ miss 后：
 ### 3.3 Nginx 能不能「合并同 logId」？
 
 **标准 Nginx 不能把多个相同 URI 的请求合成一次上游调用。**  
-同 logId 的惊群，**必须在应用层**做 singleflight/锁；Nginx 负责的是**别让总流量把入口打垮**（见第 6 节）。
+同 logId 的惊群，**必须在应用层**做 singleflight/锁；Nginx 负责的是**别让总流量把入口打垮**（见第 7 节）。
 
-若要用缓存挡重复读：可用 `proxy_cache` 按 URI 缓存**成功响应**（见 6.4），在短 TTL 内减轻 API/ES，但 **miss 回源并发**仍靠后端互斥最稳。
+若要用缓存挡重复读：可用 `proxy_cache` 按 URI 缓存**成功响应**（见 7.3），在短 TTL 内减轻 API/ES，但 **miss 回源并发**仍靠后端互斥最稳。
 
 ---
 
-## 4. ES 查询慢
+## 4. ES 查询慢（列表 + 点查）
 
-点查 logId 应走 **Get by id**，不要用重 search。
-
-| 原因 | 处理 |
+| 场景 | 做法 |
 |------|------|
-| `match`/`query_string` 扫全文 | 改为 `GET /idx/_doc/{logId}` |
-| `_source` 塞了整段巨大日志 | ES 只存摘要 + `fileUri`；全文回源文件 |
-| 无 routing，扫全部分片 | 读写统一 `routing=logId` |
-| 跨很多历史索引查 | 热数据放热索引别名；过期用 ILM 删旧索引 |
-| 集群被回填打满 | 回填限速；Bulk；错峰 |
-| 列表深分页 | 与点查分离；见下一节 `search_after` + 时间切片 |
+| 点查 logId | `GET _doc/{logId}`，勿用 match 扫全文 |
+| 列表 userId+时间+条件 | **filter** 组合；按天缩索引；见第 5 节分页 |
+| `_source` 太大 | 列表只要摘要；全文回源文件 |
+| 列表 routing | 主路径按 userId 查时，写入可用 `routing=userId` |
+| 深分页 | **禁止**大 from；用 search_after |
+| 条件过多/乱 match | 枚举字段用 term；关键字单独 multi_match 且限制字段 |
 
 ---
 
-## 5. 按 userId + 时间捞日志：分页怎么做
+## 5. 主查询：userId + 时间 + 条件筛选 + 分页
 
-### 5.1 场景与约束
+### 5.1 场景：整个日志查询怎么走
 
-```text
-GET /api/logs?userId=u1&from=2026-10-01T00:00:00Z&to=2026-10-19T00:00:00Z&limit=50&cursor=...
-```
-
-痛点：
-
-- 时间跨度**很长**（几天～几周）→ 命中文档可能十万、百万级  
-- 用 `from/size`（或 SQL `OFFSET`）深翻页 → ES 越往后越慢，甚至拒查  
-- 跨很多按天索引时，一次 search 扫太多分片  
-
-目标：稳定翻页、可预测延迟、保护集群。
-
-### 5.2 为什么不要用 from/size 深分页
+控制台典型交互：
 
 ```text
-from=10000&size=50
-→ ES 每个分片先取排序靠前的大量候选再归并
-→ 越深越贵，默认常限制 from+size ≤ 10000
+必选：userId（或登录态默认）+ 时间范围 from/to
+可选：category=network（网络日志）、level=ERROR、
+      path 前缀、statusCode、keyword…
+操作：查询 → 翻页 → 点某行看详情（logId）
 ```
 
-只适合：**前几页预览**（如前 5 页）。管理后台「翻到很后面」必须换游标。
-
-### 5.3 推荐方案：search_after 游标分页（主方案）
-
-**排序键必须稳定且唯一**，常用：
+API 形态：
 
 ```text
-sort: [ { "ts": "desc" }, { "logId.keyword": "asc" } ]
+GET /api/logs
+  ?userId=u1
+  &from=2026-10-01T00:00:00Z
+  &to=2026-10-19T00:00:00Z
+  &category=network          # 条件：只要网络日志
+  &level=ERROR               # 可选
+  &pathPrefix=/api/pay       # 可选
+  &statusCode=500            # 可选
+  &q=timeout                 # 可选关键字
+  &limit=50
+  &cursor=...
 ```
 
-- `ts`：业务时间  
-- `logId`：同一毫秒内去重、保证游标不跳/不重  
+痛点：时间长、再叠加筛选，命中仍可能很多 → 必须分页；筛选变更要重置 cursor。
 
-**第一页：**
+### 5.2 文档模型（筛选靠字段，不是靠扫文件）
+
+写入 ES 时就要抽好维度（网络日志示例）：
+
+```json
+{
+  "logId": "…",
+  "userId": "u1",
+  "ts": "2026-10-18T12:01:02.123Z",
+  "category": "network",
+  "level": "ERROR",
+  "path": "/api/pay/confirm",
+  "method": "POST",
+  "statusCode": 500,
+  "latencyMs": 3200,
+  "msgPreview": "upstream timeout…",
+  "fileUri": "fs://logs/…"
+}
+```
+
+| 筛选条件 | ES 用法 | 映射建议 |
+|----------|---------|----------|
+| userId | `term` | keyword |
+| 时间 | `range` on ts | date |
+| 网络日志 | `term` category=`network` | keyword |
+| level | `term` / `terms` | keyword |
+| path | `prefix` 或 `term` | keyword（勿乱 text） |
+| statusCode | `term` | integer |
+| 关键字 | `match` 仅 preview/msg 字段 | text + keyword 分离 |
+
+`category` 枚举要在上报约定好：`network` / `crash` / `biz` / `perf`…，前端筛选项与之一致。
+
+### 5.3 查询体：bool filter 叠条件
+
+所有「精确过滤」进 **filter**（可缓存、不算分）；关键字才进 must/match：
 
 ```json
 {
@@ -151,190 +212,186 @@ sort: [ { "ts": "desc" }, { "logId.keyword": "asc" } ]
     "bool": {
       "filter": [
         { "term": { "userId": "u1" } },
-        { "range": { "ts": { "gte": "...", "lte": "..." } } }
+        { "range": { "ts": { "gte": "…", "lte": "…" } } },
+        { "term": { "category": "network" } },
+        { "term": { "level": "ERROR" } },
+        { "prefix": { "path": "/api/pay" } },
+        { "term": { "statusCode": 500 } }
+      ],
+      "must": [
+        { "match": { "msgPreview": "timeout" } }
       ]
     }
   },
   "sort": [
     { "ts": "desc" },
     { "logId": "asc" }
-  ]
+  ],
+  "_source": ["logId", "ts", "category", "level", "path", "statusCode", "msgPreview"]
 }
 ```
 
-**下一页：**把上一页最后一条的 sort 值带回：
+无关键字时不要带 `must`，纯 filter 更快。
+
+### 5.4 为什么不要用 from/size 深分页
+
+```text
+from=10000&size=50 → 越深越贵，常触 from+size 上限
+```
+
+只适合前几页预览。正式翻页用 **search_after**。
+
+### 5.5 分页主方案：search_after 游标
+
+排序：`ts desc` + `logId asc`（稳定、防同毫秒重复/漏）。
+
+**下一页**带上页最后一条的 sort：
 
 ```json
-{
-  "size": 50,
-  "query": { "...同上..." },
-  "search_after": [ 1729000000123, "log_abc" ],
-  "sort": [
-    { "ts": "desc" },
-    { "logId": "asc" }
-  ]
-}
+"search_after": [ 1729000000123, "log_abc" ]
 ```
 
-API 对外：
+对外：
 
 ```text
-响应：
-{
-  "items": [ ... ],
-  "nextCursor": "base64(ts + logId)"   // 没有下一页则 null
-}
-
-请求下一页：
-GET /api/logs?userId=u1&from=...&to=...&limit=50&cursor={nextCursor}
+响应：{ "items": [...], "nextCursor": "…" | null }
+下一页：相同筛选参数 + cursor=nextCursor
 ```
 
-服务端解码 cursor → `search_after`，**query 条件必须与第一页完全一致**（userId、时间窗、过滤项不能变）。
+**硬规则：**
 
-### 5.4 时间太长：先切时间窗，再页内游标
+1. cursor 不透明（前端不解析）  
+2. **任一筛选条件变化（含 category、时间、level）→ 必须清空 cursor 从第一页来**  
+3. cursor 内建议校验「条件哈希」，防篡改 cursor 配错筛选  
 
-跨 30 天一次查，即使有 search_after，单次仍可能扫很多索引、很慢。
-
-**时间切片（推荐与游标组合）：**
+cursor 建议编码：
 
 ```text
-用户选 from～to（例如 30 天）
-API 内部按天（或按小时）切开：
-  day1 → day2 → … → dayN
-
-对外仍是一个 cursor，编码里带上：
-  { windowStart, windowEnd, searchAfter }
+{ filtersHash, window, searchAfter }
 ```
 
-翻页逻辑示意：
+### 5.6 时间太长：时间切片 + 游标
+
+跨很多天时，即使有筛选，仍建议：
 
 ```text
-1. 当前窗口内 search_after 还有数据 → 继续本窗口
-2. 本窗口空了 → 滑到下一时间窗口（如下一天），search_after 清空
-3. 所有窗口走完 → nextCursor = null
+内部按天（或小时）切窗口
+cursor 带上当前 window + searchAfter
+本窗翻完 → 下一窗，searchAfter 清空
 ```
 
-也可**强制产品侧限制**：单次查询跨度 ≤ 1 天 / 7 天，超了让用户改条件（最省事、最稳）。
+或产品限制：单次最长 1～7 天。  
+**有 category 等强过滤时**，命中变少，可适当放宽跨度，但仍按天缩索引集合。
 
-### 5.5 Point in Time（PIT）+ search_after（页多、要稳定快照时）
+### 5.7 只查「网络日志」时的优化
 
-长时间翻很多页时，索引持续写入可能导致「翻页过程中看到的集合在变」。需要稳定快照时：
+- 写入侧保证 `category=network` 打标准确（客户端网络库埋点 / 网关访问日志）  
+- 可选：**独立索引** `logs-network-YYYY.MM.DD`，网络控制台只搜该前缀，更省  
+- 或同一索引 + term filter（实现简单，网络占比高时仍够用）  
+- 列表勿返回 response body 全文；详情再按 logId 回源  
 
-```text
-1. 开启 PIT（绑定一组索引，带 keep_alive）
-2. 之后每次 search 带 pit.id + search_after
-3. 结束或过期后删 PIT
-```
+### 5.8 PIT / scroll
 
-代价：占用 ES 资源；keep_alive 要续约。适合内部审计「导出式」翻页；普通控制台用普通 search_after 通常够用。
+| API | 用途 |
+|-----|------|
+| search_after | 控制台翻页（主推） |
+| PIT + search_after | 长翻页要快照一致、导出 |
+| scroll | 后台一次性导出，不给前端 |
 
-### 5.6 Scroll API？一般不给前端翻页用
-
-`scroll` 适合**一次性导出**全量，占上下文，不适合大量用户交互翻页。  
-对外列表：**search_after（± PIT）**；后台批导：scroll 或 search_after 导出任务。
-
-### 5.7 索引与查询怎么配才快
+### 5.9 索引与性能
 
 | 项 | 建议 |
 |----|------|
-| 过滤 | `userId` + `ts` 放 **filter**（可缓存），不要随意 match 全文 |
-| 映射 | `userId` keyword；`ts` date；`logId` keyword |
-| 索引 | 按天滚动；查询只命中 `from～to` 覆盖的那些天（**缩小索引集合**） |
-| routing | 列表若总按 userId 查，可考虑 `routing=userId` 写入（与点查 routing=logId 可能冲突，二选一或两套索引） |
-| _source | 列表只返回摘要字段；点开详情再 Get by id / 回源文件 |
-| 上限 | `limit` 封顶（如 50/100）；禁止一次 1000 |
+| 索引范围 | 只用 from～to 覆盖的日索引，禁止无脑 `logs-*` |
+| routing | 主路径按用户查：`routing=userId` 写入与查询一致 |
+| limit | 封顶 50/100 |
+| total | 默认不精确深 total；返回 hasMore / nextCursor |
+| 限流 | 列表接口比详情更严 |
 
-**按天索引缩范围（Node 示意）：**
+### 5.10 与冷存关系
 
-```js
-// from/to → ["logs-2026.10.17", "logs-2026.10.18", "logs-2026.10.19"]
-const indices = listDailyIndices(from, to).join(",");
-await es.search({ index: indices, body: { ... } });
-```
+| 步骤 | 存储 |
+|------|------|
+| 筛选 + 分页列表 | **仅 ES** |
+| 点开详情全文 | ES 摘要不足时 → **大文件** by logId |
 
-不要每次搜 `logs-*` 全别名除非时间窗很短。
+上报必须异步写 ES 索引字段；否则「网络日志」筛不出来。
 
-### 5.8 与冷存（大文件）的关系
-
-| 能力 | 数据从哪来 |
-|------|------------|
-| 按 userId+时间列表 | **ES**（必须事先写入/回填带 userId、ts 的文档） |
-| 按 logId 详情 | ES hit 或回源大文件 |
-
-因此：上报或异步管道应**尽量把 userId、ts、logId、摘要写入 ES**；仅「点查回填」不够支撑列表。若历史只有文件没有索引，需要：
-
-- 离线任务按时间扫描冷存建索引，或  
-- 产品声明「仅支持近 N 天检索」（与 ILM 对齐）  
-
-### 5.9 API 设计注意点
-
-1. **cursor 不透明**：前端只存字符串，不自己拼 sort  
-2. **条件变更必须清空 cursor**（改时间窗 / userId 从第一页来）  
-3. **鉴权**：强制 `userId == 当前用户` 或管理员才可查他人  
-4. **限流**：列表比点查更伤 ES，Nginx + 应用对 `/api/logs` 查询接口单独限更严  
-5. **总数 total**：深分页时 `track_total_hits` 很贵；可只返回 `hasMore`，或总数单独受限查询  
-
-### 5.10 Node.js 列表分页要点
+### 5.11 Node.js 列表示意（含条件）
 
 ```js
-// 示意
-async function listLogs({ userId, from, to, limit = 50, cursor }) {
-  const pageSize = Math.min(limit, 100);
-  const { searchAfter, window } = decodeCursor(cursor) ?? {
-    searchAfter: undefined,
-    window: firstWindow(from, to), // 例如按天切的第一窗
+function buildFilters({ userId, from, to, category, level, pathPrefix, statusCode }) {
+  const filter = [
+    { term: { userId } },
+    { range: { ts: { gte: from, lte: to } } },
+  ];
+  if (category) filter.push({ term: { category } });       // network
+  if (level) filter.push({ term: { level } });
+  if (pathPrefix) filter.push({ prefix: { path: pathPrefix } });
+  if (statusCode != null) filter.push({ term: { statusCode } });
+  return filter;
+}
+
+async function listLogs(params) {
+  const pageSize = Math.min(params.limit ?? 50, 100);
+  const filtersHash = hashFilters(params); // 变条件则旧 cursor 作废
+  const decoded = decodeCursor(params.cursor);
+  if (decoded && decoded.filtersHash !== filtersHash) {
+    throw badRequest("cursor does not match filters");
+  }
+  const window = decoded?.window ?? firstWindow(params.from, params.to);
+  const searchAfter = decoded?.searchAfter;
+
+  const body = {
+    size: pageSize,
+    query: {
+      bool: {
+        filter: buildFilters({ ...params, from: window.start, to: window.end }),
+        ...(params.q ? { must: [{ match: { msgPreview: params.q } }] } : {}),
+      },
+    },
+    sort: [{ ts: "desc" }, { logId: "asc" }],
+    _source: ["logId", "ts", "category", "level", "path", "statusCode", "msgPreview"],
   };
+  if (searchAfter) body.search_after = searchAfter;
 
   const resp = await es.search({
     index: indicesForWindow(window),
-    size: pageSize,
-    body: {
-      query: {
-        bool: {
-          filter: [
-            { term: { userId } },
-            { range: { ts: { gte: window.start, lte: window.end } } },
-          ],
-        },
-      },
-      sort: [{ ts: "desc" }, { logId: "asc" }],
-      search_after: searchAfter,
-      _source: ["logId", "ts", "level", "tag", "msgPreview"],
-    },
+    routing: params.userId,
+    body,
     request_timeout: "3s",
   });
 
   const hits = resp.hits.hits;
-  let next = null;
+  let nextCursor = null;
   if (hits.length === pageSize) {
-    next = encodeCursor({
+    nextCursor = encodeCursor({
+      filtersHash,
       window,
       searchAfter: hits[hits.length - 1].sort,
     });
   } else {
-    const w = nextWindow(window, from, to);
-    if (w) next = encodeCursor({ window: w, searchAfter: undefined });
+    const w = nextWindow(window, params.from, params.to);
+    if (w) nextCursor = encodeCursor({ filtersHash, window: w, searchAfter: undefined });
   }
-  return { items: hits.map(unwrap), nextCursor: next };
+  return { items: hits.map(unwrap), nextCursor };
 }
 ```
 
-注意：列表接口同样设超时、连接池；禁止一次拉太大 `_source`。
+### 5.12 方案对照
 
-### 5.11 方案对照（面试表）
+| 方案 | 适用 |
+|------|------|
+| filter + search_after | 条件筛选 + 翻页（主推） |
+| 时间切片 + 游标 | from/to 很长 |
+| 限制最大时间跨度 | 产品可接受时最省心 |
+| 网络日志独立索引 | network 流量大、控制台专用 |
+| PIT | 导出/长快照 |
+| from/size | 仅前几页 |
 
-| 方案 | 适用 | 不适用 |
-|------|------|--------|
-| from/size | 前几页 | 深翻页、长跨度 |
-| **search_after 游标** | 常规控制台翻页 | —（主推） |
-| **时间切片 + 游标** | from/to 很长 | —（主推组合） |
-| PIT + search_after | 长会话稳定快照、导出 | 短查询不必 |
-| scroll | 后台一次性导出 | 多用户交互翻页 |
-| 限制最大时间跨度 | 产品可接受时最省心 | 必须查很久历史时需切片 |
+### 5.13 本节收口
 
-### 5.12 本节收口
-
-> 按 userId+时间捞日志：用 filter + 按天缩索引；分页用 **search_after（ts+logId）** 不透明 cursor；时间太长则 **切时间窗** 或限制跨度；需要稳定快照再上 PIT。列表靠 ES 文档，冷文件不负责「按用户扫描」。
+> **整个查询**：写入时原文进文件、维度进 ES → 列表用 **userId+时间+条件（如 network）** 做 filter 查询并 **search_after 分页** → 点详情用 **logId** 取全文（可回源）。时间长则切窗；改筛选必须重置 cursor。
 
 ---
 
