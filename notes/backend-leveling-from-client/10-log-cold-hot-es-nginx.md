@@ -182,46 +182,120 @@ GET /api/logs/{logId}
   → 要全文 / miss → 文件服务（fileUri 或 logId）→ 可回填 ES 摘要
 ```
 
-并发回填见第 3 节。
+同一段日志的并发读写优化见第 3 节。
 
 ---
 
-## 3. 并发：多请求同时查同一个 logId
+## 3. 并发：多请求同时查「同一段日志」时，ES 读写怎么优化
 
-### 3.1 问题
+「同一段」指：相同或高度重叠的查询条件，例如同一 `from/to` + 同一 `module=network`（再加相同翻页附近）。多用户、多标签页会同时打到 ES **读**，并可能触发批量 **写**（上报索引 / miss 回填）。
 
-同一 `logId` 在 ES 未命中时，多个用户/标签页同时请求 → 集体 miss → 重复打文件服务 → 并发写 ES。
+### 3.1 会出什么问题
 
-### 3.2 后端解决方案（主方案）
-
-| 手段 | 做法 |
+| 方向 | 现象 |
 |------|------|
-| **Singleflight / 互斥** | 同一 `logId` 只允许一个回源；其它等待或复用结果 |
-| **分布式锁** | 多实例时用 `SET NX EX backfill:{logId}`，拿到锁的才回源写 ES |
-| **幂等写 ES** | `_id = logId`；`index` 覆盖或 `create` 遇 409 忽略 |
-| **routing** | 写入与点查带同一 `routing=logId`，降低扫分片 |
+| **读放大** | 同一查询条件被重复执行 N 次，ES 查询线程、缓存、磁盘 IO 打满 |
+| **写放大** | 上报高峰 Bulk 过大；或多人详情 miss 同时回填，集中写同一热索引 |
+| **读写互相踩** | 刷新/合并（merge）高峰时查询变慢；查询过重拖慢写入队列 |
+| **连接与 Node** | 无连接池上限、无并发闸，把 ES 或自身 event loop 拖死 |
 
-伪流程：
+### 3.2 读路径优化（同一段列表查询）
+
+目标：同样条件的并发读，尽量 **少打 ES、打也要轻**。
+
+| 优化 | 做法 |
+|------|------|
+| **查询形态固定** | 只用 filter（eventTime + module）；禁深 from/size；`_source` 只要摘要字段 |
+| **缩索引范围** | 同一段只打开覆盖的日索引，勿 `logs-*` |
+| **短结果缓存** | 对「条件哈希 + cursor」缓存列表页 5～30s（Redis）；同一段多人共享一页结果 |
+| **Singleflight（查询级）** | 进程内：相同 `queryKey` 共用一个进行中的 Promise；多实例可用 Redis 锁「只放行 1 个打 ES，其它读缓存」 |
+| **filter 缓存友好** | 条件稳定、走 filter context，利于 ES 内部缓存 |
+| **限流与隔离** | Nginx/应用对列表接口单独限流；必要时独立「查询」集群与「写入」集群 |
+| **分页要浅要稳** | search_after；大跨度切窗，避免一次扫很长一段 |
+
+`queryKey` 示例：
+
+```text
+hash(from, to, module, file, line, userId, q, cursor)
+```
+
+示意：
+
+```text
+list(queryKey):
+  if redis.get(queryKey) → return
+  if singleflight(queryKey) 已有人在查 → await 同一结果
+  else:
+      hits = es.search(...)
+      redis.setex(queryKey, 15s, hits)
+      return hits
+```
+
+注意：有权限隔离时，cache key **必须带 userId/角色**，防串数据。
+
+### 3.3 写路径优化（同一段相关的写入）
+
+写入来源通常两类：**管道异步索引**（主）、**详情 miss 回填**（辅）。
+
+#### A. 管道写入（上报 → ES）
+
+| 优化 | 做法 |
+|------|------|
+| **Bulk 批量** | 聚合几百～几千条一刷，忌逐条 index |
+| **刷新间隔** | 提高 `refresh_interval`（如 5s～30s）换写入吞吐；列表近实时可接受秒级延迟 |
+| **副本与路由** | 写入高峰可临时调副本策略（按运维规范）；`routing=module` 或 `userId` 需与查询一致 |
+| **背压** | MQ 消费者限速；ES 429/`es_rejected_execution` 时退避，勿无脑重试打爆 |
+| **写入与查询分离** | 热查询走专用节点/集群；ingest 打写入节点 |
+| **文档要瘦** | 不写完整 extra；只写主维 + preview，降低同一段热索引的写放大 |
+
+#### B. 详情回填写入（多人点开同一段里的多条 / 同一 logId）
+
+| 优化 | 做法 |
+|------|------|
+| **按 logId 幂等** | `_id=logId`；`create` 或覆盖写，重复回填无害 |
+| **Singleflight / 锁** | 同 logId 只回源一次；同「段」可限制全局 backfill 并发（p-limit） |
+| **能不回填就不回填** | 列表已有摘要则详情可只读文件不写 ES；或异步队列回填，不挡响应 |
+| **回填限速** | 整段 miss 风暴时：令牌桶限制 ES index QPS |
+
+同 logId 回填流程：
 
 ```text
 miss 后：
   if tryLock("backfill:"+logId):
       body = file.get(logId)
-      es.index(_id=logId, body)
+      es.index(_id=logId, doc=瘦文档)  // 失败仍可返回文件内容
       unlock
   else:
-      sleep 短暂 / 轮询 es.get
-      或自己读文件返回但不写 ES（降级）
+      等待/轮询 ES 或只读文件不写 ES
 ```
 
-### 3.3 Nginx 能不能「合并同 logId」？
+### 3.4 读写一体时的集群侧优化
 
-**标准 Nginx 不能把多个相同 URI 的请求合成一次上游调用。**  
-同 logId 的惊群，**必须在应用层**做 singleflight/锁；Nginx 负责的是**别让总流量把入口打垮**（见第 7 节）。
+| 项 | 建议 |
+|----|------|
+| 热索引 | 同一时段+热模块写入集中，注意分片数别过碎或过粗 |
+| 副本 | 读多写少可适当加副本分担读；写入瓶颈时评估 |
+| 熔断 | 查询慢或拒绝时，应用快速失败/降级，避免重试风暴 |
+| 观测 | 分段监控：查询 QPS/P99、Bulk 拒绝率、refresh/merge、同一 queryKey 命中率 |
 
-若要用缓存挡重复读：可用 `proxy_cache` 按 URI 缓存**成功响应**（见 7.3），在短 TTL 内减轻 API/ES，但 **miss 回源并发**仍靠后端互斥最稳。
+### 3.5 Nginx 在「同一段」并发里做什么
+
+标准 Nginx **不能**把「相同列表条件」自动合并成一次 ES 查询。
+
+| 诉求 | Nginx | 应用 / ES |
+|------|-------|-----------|
+| 多用户打同一段列表 | 按 IP/用户/`$request_uri` 限流 | queryKey 缓存 + 查询 singleflight |
+| 同一 logId 详情毛刺 | URI 限流、可选短 proxy_cache | logId 锁 + 幂等写 |
+| 保护 ES | 总入口限流、超时 | Bulk 背压、读写隔离 |
+
+详见第 7 节。
+
+### 3.6 本节收口
+
+> **同一段日志**高并发时：读侧用 **瘦查询 + 日索引裁剪 + 短缓存 + 查询级 singleflight**；写侧用 **Bulk、refresh 调优、瘦文档、背压**；详情回填用 **logId 幂等 + 锁 + 限速**。Nginx 只管流量毛刺，合并请求在应用层做。
 
 ---
+
 
 ## 4. ES 查询慢（列表 + 点查）
 
