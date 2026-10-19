@@ -435,8 +435,8 @@ logs-2026.10.19   ← 回填写入当前热索引（别名 logs-hot）
 | 诉求 | Nginx | 应用 |
 |------|-------|------|
 | 很多用户同时查（总流量） | **限流、连接数、超时** | 线程池/连接池 |
-| 同一 logId 并发 miss 回填 | 可辅助短缓存 | **互斥 / 幂等（主）** |
-| 列表查询（userId+时间） | 单独更严限流 | search_after + 时间切片 |
+| 同一 logId 详情回填 | 可辅助短缓存 | **互斥 / 幂等（主）** |
+| 列表（userId+时间+条件如 network） | **更严**限流 | filter + search_after + 时间切片 |
 | 鉴权 | 可粗拦 | JWT/权限（主） |
 | 路由 | `location` 转发 | 业务路由 |
 
@@ -707,12 +707,14 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 
 | 难点 | 对策 |
 |------|------|
-| 并发 miss 打穿文件服务 | 互斥回填 + `_id` 幂等 |
-| 多用户总流量过大 | Nginx `limit_req` / `limit_conn` + 应用限流 |
+| 列表无数据/筛不出网络日志 | 上报必须写 ES 维度字段（category 等） |
+| **userId+时间+条件分页** | filter 叠条件；**search_after**；改筛选重置 cursor；时间切片 |
+| 条件用 match 扫全体 | 枚举/ID 用 term；关键字限字段 |
+| 并发 miss 打穿文件服务 | 详情路径互斥回填 + `_id` 幂等 |
+| 多用户总流量过大 | Nginx 限流；列表接口更严 |
 | 单 logId 被刷 | Nginx 按 `$request_uri` 限流 |
-| ES 点查慢 | Get by id、routing、控 `_source`、ILM 控索引体量 |
-| **userId+长时间列表分页** | **search_after 游标**；**时间切片**；禁深 from/size；按天缩索引 |
-| ES 过期 | 按天索引 + ILM 保留 N 天（与可查窗口对齐） |
+| ES 点查慢 | Get by id；列表控 `_source`、按天缩索引 |
+| ES 过期 | ILM N 天与可查窗口对齐 |
 | 缓存串权 | 带权限则勿盲目 proxy_cache，或 key 含 userId |
 | ES 写失败 | 仍返回文件内容；指标告警 |
 | 穿透非法 id | 校验 + 负缓存 |
@@ -724,9 +726,9 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 
 ## 11. 面试收口
 
-> 大文件是只写真相；ES 是可 ILM 过期的热层。点查 Cache-Aside 走 `_id`；同 logId 惊群靠互斥回填。  
-> **按 userId+时间列表**：filter 查询 + **search_after（ts+logId）** 不透明 cursor；跨度大则 **按天/按小时切窗口** 或限制最大时间范围；需要稳定快照再用 PIT。不要用 from/size 深翻页。  
-> Nginx 限多用户与单 URI；Node 管 dual：锁、超时、连接池、event loop。ES 保留天数与「能搜多远」对齐。
+> **主入口是 userId + 时间范围 + 可选条件（如 category=network）**，在 ES 上用 bool filter 查摘要列表，并用 **search_after** 分页；时间长则切窗。改筛选必须重置 cursor。  
+> **logId 用于详情**：ES miss 再回源大文件并回填。原文在文件，检索维度必须在写入时进 ES，否则网络日志等筛选项无解。  
+> Nginx 严限列表；Node 做超时、连接池、详情 singleflight；ILM 保留天数对齐可查窗口。
 
 ---
 

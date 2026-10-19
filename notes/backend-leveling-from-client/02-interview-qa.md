@@ -379,17 +379,15 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 网关鉴权与限流；批量写入；Kafka 缓冲；乱序与重复；采样；隐私脱敏；回压策略。  
 （客户端出身可强调端上批量与服务端契约。）
 
-### I4. 日志已在大文件，按 logId 查 / 按 userId+时间列表分页（Node.js）
+### I4. 日志查询：userId+时间+条件筛选分页 / logId 详情回源（Node.js）
 
 **要点**：  
-- 大文件只写真相；ES 热层可丢；点查 Cache-Aside（`_id`）  
-- 同 logId 并发 miss：singleflight/锁 + ES 幂等写；Nginx 不能合并回源  
-- **列表**：`userId`+`ts` filter；**search_after（ts+logId）** 游标；时间太长则**按天切片**或限制跨度；禁用深 from/size  
-- 多用户：Nginx 限流；列表接口限更严；按天缩索引范围  
-- 过期：ILM 保留 N 天，与可查窗口对齐  
-- **Node.js**：防堵 loop；Redis 锁；超时+连接池；回源并发上限  
+- **主路径**：`userId` + 时间 + 条件（如 `category=network`）→ ES bool **filter** + **search_after** 分页；改筛选重置 cursor；时间长则切窗  
+- 写入时原文进大文件、维度进 ES，否则筛不出网络日志等  
+- **详情**：logId → ES get，miss 回源文件并回填（singleflight）  
+- Nginx 列表限流更严；ILM 与可查窗口对齐；Node 超时/连接池/防堵 loop  
 
-完整方案见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) 第 5 节。
+完整方案见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md)。
 
 ---
 
