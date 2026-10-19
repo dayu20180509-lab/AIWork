@@ -854,7 +854,9 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 | extra 撑爆索引 | 全文进文件，ES 只 `extraPreview`（extra 越不重复越不该主索引） |
 | 只选 module 不选时间 | **不够**；产品强制时间范围（module 高重复） |
 | 条件用 match 扫全体 | module/file 用 term；关键字只打 preview |
-| 并发 miss 打穿文件服务 | 详情路径互斥回填 + `_id` 幂等 |
+| **同一段日志并发读** | queryKey 短缓存 + 查询 singleflight；瘦 filter；缩日索引 |
+| **同一段相关并发写** | Bulk + refresh 调优 + 瘦文档 + MQ 背压；回填限速 |
+| 详情 miss 打穿文件/ES | logId 锁 + `_id` 幂等；可异步回填 |
 | 多用户总流量过大 | Nginx 限流；列表接口更严 |
 | 单 logId 被刷 | Nginx 按 `$request_uri` 限流 |
 | ES 点查慢 | Get by id；列表控 `_source`、按天缩索引 |
@@ -870,8 +872,8 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 
 ## 11. 面试收口
 
-> **时间+模块做主索引够不够？** module 高重复 → 必须带时间窗 + 分页，这样够用；extra 几乎不重复 → 更不该当列表主索引，放文件。  
-> 列表：eventTime+module filter + search_after；详情：logId 回源。Nginx/Node 限流与超时照旧。
+> **时间+模块做主索引够不够？** module 高重复 → 必须带时间窗 + 分页；extra 不重复 → 不做列表主索引。  
+> **同一段并发**：读用缓存+查询 singleflight；写用 Bulk/背压/瘦文档；详情回填 logId 幂等+锁。Nginx 限流，合并在应用层。
 
 ---
 

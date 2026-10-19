@@ -385,7 +385,8 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 - 列：`eventTime`、`module`（**高重复**）、`file`/`line`、`extra`（**几乎不重复**）  
 - **判断**：时间+模块做列表主索引 **够用**（须强制时间窗 + search_after）；module 不能单独查；extra **不要**当主索引，全文进文件  
 - 列表：filter(eventTime, module, …) + search_after；详情 logId 回源  
-- 见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) §1.3 / §5  
+- **同一段并发**：读=短缓存+查询 singleflight；写=Bulk/背压/瘦文档；回填=logId 锁+幂等  
+- 见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) §1.3 / §3 / §5  
 
 完整方案见该文档。
 
