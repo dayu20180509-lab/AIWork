@@ -1,8 +1,9 @@
 # 日志冷热架构：大文件 + ES 查询 + Nginx 限流
 
-> **主查询路径**：前端按 **userId + 时间范围** 捞日志，并可叠加条件（如 `category=network` 网络日志、level、path 等），时间长则**分页**。  
-> **详情路径**：列表点进某条后，用 **logId** 取全文（ES 有则直接用，没有再回源大文件并回填）。  
-> 后台 API 以 **Node.js** 为例。本文含：整体查询链路、条件筛选、分页、点查回填、Nginx、Node 难点。
+> **日志列**：发生时间、功能模块、代码文件:行号、附加内容。  
+> **ES 主索引维度**：**发生时间 + 功能模块**（列表按此筛）；时间长则分页。  
+> **详情**：用 **logId** 取全文（ES → miss 回源大文件并回填）。  
+> 后台 **Node.js**。本文含字段模型、查询链路、筛选分页、回填、Nginx、Node 难点。
 
 ---
 
@@ -10,42 +11,50 @@
 
 | 层 | 角色 |
 |----|------|
-| 大文件系统 | **原文真相源**，只写追加；按 **logId** 随机读全文 |
-| Elasticsearch | **检索主入口**：按 userId、时间、类别等过滤 + 分页；存摘要/部分字段，可 ILM 过期 |
-| API 服务 | **列表走 ES search**；**详情走 ES get，miss 再回源文件回填** |
-| Nginx | TLS、路由、多用户/查询接口限流 |
+| 大文件系统 | **原文真相源**（含完整附加内容）；按 **logId** 读 |
+| Elasticsearch | **检索主入口**：按 **eventTime + module** 过滤分页；可带 file/line 摘要；ILM 过期 |
+| API 服务 | **列表 = ES search**；**详情 = ES get，miss 回源文件** |
+| Nginx | TLS、路由、列表/详情限流 |
 
 ```text
 前端控制台
     → Nginx
     → Log Query API（Node.js）
          │
-         │ ① 主路径：条件列表查询
-         ├─ GET /api/logs?userId&from&to&category=network&level&...&cursor=
-         │     → 鉴权 → 拼 ES bool filter → search_after 分页
-         │     → 返回摘要列表（logId, ts, category, preview...）
+         │ ① 主路径：时间 + 功能模块（+ 可选条件）列表
+         ├─ GET /api/logs?from&to&module=checkout&file&line&q&cursor=
+         │     → ES：filter(eventTime, module, …) + search_after
+         │     → 返回：logId, eventTime, module, file, line, extraPreview…
          │
-         │ ② 详情路径：点开某一条
+         │ ② 详情：点开一行
          └─ GET /api/logs/{logId}
-               → ES.get(logId)
-                    hit  → 返回（或摘要+fileUri 再拉全文）
-                    miss → 大文件系统.get(logId) → 回填 ES → 返回
+               → ES.get → miss 则大文件回源并回填
 ```
 
-### 1.1 主从关系（务必记清）
+### 1.1 字段模型（列定义）
 
-| 能力 | 靠谁 | 说明 |
-|------|------|------|
-| 按 userId + 时间 + 条件筛选 | **ES** | 冷文件无法高效「按用户扫」 |
-| 分页翻页 | **ES search_after** | 见第 5 节 |
-| 单条全文 | ES 或 **大文件** | 列表先出摘要；详情可回源 |
-| 写入管线 | 上报/MQ → 文件存原文 + **异步索引进 ES** | 仅点查回填撑不住列表 |
+| 列（业务） | 字段名建议 | 是否进 ES 索引 | 说明 |
+|------------|------------|----------------|------|
+| 日志发生时间 | `eventTime` | **是（主）** | date；按天滚索引、range 过滤、排序 |
+| 具体功能模块 | `module` | **是（主）** | keyword；如 `network` / `checkout` / `pay` |
+| 代码文件 | `file` | 存 + 可选筛 | keyword，如 `src/net/http.ts` |
+| 具体行数 | `line` | 存 + 可选筛 | integer |
+| 附加内容 | `extra` | 摘要 / 不全量索引 | 大段进文件；ES 可留 `extraPreview` |
+| 日志 ID | `logId` | `_id` + keyword | 详情与回源主键 |
+| 归属用户（可选） | `userId` | 建议有 | 多租户鉴权、强制数据隔离 |
 
-原则：
+> 「以时间和功能模块做索引」= 查询热路径只靠这两维高效过滤；`file`/`line`/`extra` 是展示与辅筛，**不要指望对巨大 extra 做全量倒排当主查询。**
 
-- 列表/筛选 **不以 logId 为入口**，以 **userId + 时间（必选）+ 业务条件（可选）** 为入口。  
-- logId 是结果里的主键，用于详情与回源。  
-- ES 挂掉时：列表降级（失败提示）；详情仍可尝试直读文件（若调用方已知 logId）。
+### 1.2 主从关系
+
+| 能力 | 靠谁 |
+|------|------|
+| 按时间 + 模块列表 / 分页 | **ES** |
+| 辅筛 file / line / 关键字 | **ES**（字段已映射的前提下） |
+| 完整附加内容 | **大文件**（或 ES 仅存预览） |
+| 单条定位 | **logId** |
+
+原则：列表入口是 **eventTime 范围 + module（常用）**，不是 logId；logId 出详情。
 
 ---
 
@@ -54,37 +63,57 @@
 ### 2.1 写入（查询的前提）
 
 ```text
-客户端/业务上报
-  → 接入服务（鉴权、限流、batchId 幂等）
-  → 原文写入大文件系统（key=logId）
-  → 异步：抽取索引字段写入 ES
-       userId, ts, logId, category, level, path, statusCode, msgPreview, fileUri...
+上报
+  → 接入（鉴权、限流、batch 幂等）
+  → 大文件：存完整记录（含 extra 全文），key=logId
+  → ES 文档（索引热字段）：
+       eventTime, module,          ← 主索引维度
+       file, line,                 ← 定位代码
+       extraPreview, logId, userId, fileUri
 ```
 
-没有「索引字段进 ES」，后面所有筛选/分页都做不了。
+mapping 要点：
 
-### 2.2 查询（控制台用法）
+```json
+{
+  "mappings": {
+    "properties": {
+      "eventTime": { "type": "date" },
+      "module":    { "type": "keyword" },
+      "file":      { "type": "keyword" },
+      "line":      { "type": "integer" },
+      "logId":     { "type": "keyword" },
+      "userId":    { "type": "keyword" },
+      "extraPreview": { "type": "text", "fields": { "raw": { "type": "keyword", "ignore_above": 256 } } },
+      "fileUri":   { "type": "keyword", "index": false }
+    }
+  }
+}
+```
+
+- 按 **eventTime** 建日索引：`logs-2026.10.19`  
+- 查询常带 `module` → filter 走 keyword，非常快  
+- `extra` 全文一般 **不进 ES** 或只 preview，避免索引膨胀  
+
+### 2.2 查询（控制台）
 
 ```text
-1. 用户选时间范围（必选）+ 默认带当前 userId（或管理员选用户）
-2. 可选筛：日志类型/category（network）、level、URL path、statusCode、关键字…
-3. 点「查询」→ 列表 API 第一页
-4. 滚动/下一页 → 带同一筛选条件 + cursor
-5. 点某一行 → 详情 API（logId）拉全文
+1. 必选：时间范围 from/to（发生时间）
+2. 常用：功能模块 module（如 network / checkout）
+3. 可选：file、line、附加内容关键字 q、userId（管理员）
+4. 查询 → 翻页（cursor）
+5. 点行 → logId 详情（全文 extra）
 ```
 
-### 2.3 详情读路径（logId，辅路径）
+### 2.3 详情读路径（logId）
 
 ```text
 GET /api/logs/{logId}
-
-1. 鉴权（该 log 是否属于可访问用户）
-2. ES 点查
-3. hit → 返回；若只有摘要则按 fileUri 读文件拼全文
-4. miss → singleflight/锁 → 文件服务 → 回填 ES → 返回
+  → ES.get → 有预览可够用则返回
+  → 要全文 / miss → 文件服务（fileUri 或 logId）→ 可回填 ES 摘要
 ```
 
-可选：异步回填；极热 logId 短缓存。并发见第 3 节。
+并发回填见第 3 节。
 
 ---
 
@@ -129,81 +158,67 @@ miss 后：
 
 | 场景 | 做法 |
 |------|------|
-| 点查 logId | `GET _doc/{logId}`，勿用 match 扫全文 |
-| 列表 userId+时间+条件 | **filter** 组合；按天缩索引；见第 5 节分页 |
-| `_source` 太大 | 列表只要摘要；全文回源文件 |
-| 列表 routing | 主路径按 userId 查时，写入可用 `routing=userId` |
-| 深分页 | **禁止**大 from；用 search_after |
-| 条件过多/乱 match | 枚举字段用 term；关键字单独 multi_match 且限制字段 |
+| 列表：时间 + 模块 | `range(eventTime)` + `term(module)` 进 **filter**；按天缩索引 |
+| 点查 logId | `GET _doc/{logId}` |
+| `_source` 太大 | 列表不要塞完整 `extra`；只要 preview |
+| 深分页 | 禁用大 from；用 search_after（按 eventTime+logId） |
+| 对 extra 全文乱搜 | 仅 `extraPreview` match；全文回源文件 |
+| 高频单模块 | 可考虑 `routing=module` 或按模块拆索引前缀 |
 
 ---
 
-## 5. 主查询：userId + 时间 + 条件筛选 + 分页
+## 5. 主查询：发生时间 + 功能模块 + 分页
 
-### 5.1 场景：整个日志查询怎么走
-
-控制台典型交互：
+### 5.1 整个查询怎么走
 
 ```text
-必选：userId（或登录态默认）+ 时间范围 from/to
-可选：category=network（网络日志）、level=ERROR、
-      path 前缀、statusCode、keyword…
-操作：查询 → 翻页 → 点某行看详情（logId）
+必选：发生时间 from/to
+常用：功能模块 module（例：network = 网络相关模块）
+可选：file、line、userId、附加内容关键字 q
+操作：查列表 → cursor 翻页 → 点 logId 看完整 extra
 ```
 
-API 形态：
+API：
 
 ```text
 GET /api/logs
-  ?userId=u1
-  &from=2026-10-01T00:00:00Z
+  ?from=2026-10-01T00:00:00Z
   &to=2026-10-19T00:00:00Z
-  &category=network          # 条件：只要网络日志
-  &level=ERROR               # 可选
-  &pathPrefix=/api/pay       # 可选
-  &statusCode=500            # 可选
-  &q=timeout                 # 可选关键字
+  &module=network                 # 功能模块（主筛）
+  &file=src/net/client.ts         # 可选：代码文件
+  &line=128                       # 可选：行号
+  &userId=u1                      # 可选/鉴权注入
+  &q=timeout                      # 可选：搜 extraPreview
   &limit=50
   &cursor=...
 ```
 
-痛点：时间长、再叠加筛选，命中仍可能很多 → 必须分页；筛选变更要重置 cursor。
-
-### 5.2 文档模型（筛选靠字段，不是靠扫文件）
-
-写入 ES 时就要抽好维度（网络日志示例）：
+示例文档：
 
 ```json
 {
-  "logId": "…",
+  "logId": "01JB…",
+  "eventTime": "2026-10-18T12:01:02.123Z",
+  "module": "network",
+  "file": "src/net/http_client.ts",
+  "line": 128,
+  "extraPreview": "request timeout after 3000ms host=…",
   "userId": "u1",
-  "ts": "2026-10-18T12:01:02.123Z",
-  "category": "network",
-  "level": "ERROR",
-  "path": "/api/pay/confirm",
-  "method": "POST",
-  "statusCode": 500,
-  "latencyMs": 3200,
-  "msgPreview": "upstream timeout…",
-  "fileUri": "fs://logs/…"
+  "fileUri": "fs://logs/01JB…"
 }
 ```
 
-| 筛选条件 | ES 用法 | 映射建议 |
-|----------|---------|----------|
-| userId | `term` | keyword |
-| 时间 | `range` on ts | date |
-| 网络日志 | `term` category=`network` | keyword |
-| level | `term` / `terms` | keyword |
-| path | `prefix` 或 `term` | keyword（勿乱 text） |
-| statusCode | `term` | integer |
-| 关键字 | `match` 仅 preview/msg 字段 | text + keyword 分离 |
+### 5.2 为什么「时间 + 模块」做索引够用
 
-`category` 枚举要在上报约定好：`network` / `crash` / `biz` / `perf`…，前端筛选项与之一致。
+| 维度 | 作用 |
+|------|------|
+| **eventTime** | 日索引裁剪 + range 过滤 + 排序翻页，砍掉无关天的数据 |
+| **module** | keyword 精确命中「网络 / 支付 / 登录…」，基数远小于全文 |
 
-### 5.3 查询体：bool filter 叠条件
+`file`+`line` 用于定位代码，作**附加 filter**即可，一般不必当路由键。  
+`extra` 变化大、体积大 → **文件存全文，ES 只 preview**，避免索引爆炸。
 
-所有「精确过滤」进 **filter**（可缓存、不算分）；关键字才进 must/match：
+### 5.3 ES 查询体（filter 叠主维 + 辅维）
 
 ```json
 {
@@ -211,130 +226,109 @@ GET /api/logs
   "query": {
     "bool": {
       "filter": [
-        { "term": { "userId": "u1" } },
-        { "range": { "ts": { "gte": "…", "lte": "…" } } },
-        { "term": { "category": "network" } },
-        { "term": { "level": "ERROR" } },
-        { "prefix": { "path": "/api/pay" } },
-        { "term": { "statusCode": 500 } }
+        { "range": { "eventTime": { "gte": "…", "lte": "…" } } },
+        { "term":  { "module": "network" } },
+        { "term":  { "file": "src/net/http_client.ts" } },
+        { "term":  { "line": 128 } },
+        { "term":  { "userId": "u1" } }
       ],
       "must": [
-        { "match": { "msgPreview": "timeout" } }
+        { "match": { "extraPreview": "timeout" } }
       ]
     }
   },
   "sort": [
-    { "ts": "desc" },
+    { "eventTime": "desc" },
     { "logId": "asc" }
   ],
-  "_source": ["logId", "ts", "category", "level", "path", "statusCode", "msgPreview"]
+  "_source": ["logId", "eventTime", "module", "file", "line", "extraPreview"]
 }
 ```
 
-无关键字时不要带 `must`，纯 filter 更快。
+无 `q` 时去掉 `must`，纯 filter 更快。
 
-### 5.4 为什么不要用 from/size 深分页
+### 5.4 分页：search_after（禁深 from/size）
 
-```text
-from=10000&size=50 → 越深越贵，常触 from+size 上限
-```
-
-只适合前几页预览。正式翻页用 **search_after**。
-
-### 5.5 分页主方案：search_after 游标
-
-排序：`ts desc` + `logId asc`（稳定、防同毫秒重复/漏）。
-
-**下一页**带上页最后一条的 sort：
+排序键：`eventTime desc` + `logId asc`。
 
 ```json
-"search_after": [ 1729000000123, "log_abc" ]
+"search_after": [ 1729000000123, "01JB…" ]
 ```
-
-对外：
 
 ```text
 响应：{ "items": [...], "nextCursor": "…" | null }
-下一页：相同筛选参数 + cursor=nextCursor
+下一页：相同 from/to/module/file/… + cursor
 ```
 
-**硬规则：**
+硬规则：
 
-1. cursor 不透明（前端不解析）  
-2. **任一筛选条件变化（含 category、时间、level）→ 必须清空 cursor 从第一页来**  
-3. cursor 内建议校验「条件哈希」，防篡改 cursor 配错筛选  
+1. cursor 不透明  
+2. **改时间、module、file、line、q 任一条件 → 重置 cursor**  
+3. cursor 内带 `filtersHash`，防条件与游标错配  
 
-cursor 建议编码：
+### 5.5 时间跨度大：按天切窗 + 游标
 
 ```text
-{ filtersHash, window, searchAfter }
+cursor = { filtersHash, window(start,end), searchAfter }
+本窗翻完 → 下一天窗口，searchAfter 清空
 ```
 
-### 5.6 时间太长：时间切片 + 游标
+或产品限制单次最长 1～7 天。有 `module` 强过滤时可略放宽，但仍只打开相关日索引。
 
-跨很多天时，即使有筛选，仍建议：
+### 5.6 按功能模块优化（如网络模块）
 
-```text
-内部按天（或小时）切窗口
-cursor 带上当前 window + searchAfter
-本窗翻完 → 下一窗，searchAfter 清空
-```
+| 做法 | 说明 |
+|------|------|
+| 统一 `module` 枚举 | 上报与前端下拉同一套：`network`/`checkout`/… |
+| 同索引 + term | 实现简单，默认推荐 |
+| 模块流量极大 | 可选索引前缀 `logs-network-YYYY.MM.DD` 或 `routing=module` |
+| 列表字段 | 固定出 eventTime、module、file、line、extraPreview；完整 extra 走详情 |
 
-或产品限制：单次最长 1～7 天。  
-**有 category 等强过滤时**，命中变少，可适当放宽跨度，但仍按天缩索引集合。
-
-### 5.7 只查「网络日志」时的优化
-
-- 写入侧保证 `category=network` 打标准确（客户端网络库埋点 / 网关访问日志）  
-- 可选：**独立索引** `logs-network-YYYY.MM.DD`，网络控制台只搜该前缀，更省  
-- 或同一索引 + term filter（实现简单，网络占比高时仍够用）  
-- 列表勿返回 response body 全文；详情再按 logId 回源  
-
-### 5.8 PIT / scroll
+### 5.7 PIT / scroll
 
 | API | 用途 |
 |-----|------|
 | search_after | 控制台翻页（主推） |
-| PIT + search_after | 长翻页要快照一致、导出 |
-| scroll | 后台一次性导出，不给前端 |
+| PIT + search_after | 导出、长快照 |
+| scroll | 仅后台批导 |
 
-### 5.9 索引与性能
+### 5.8 索引与性能清单
 
 | 项 | 建议 |
 |----|------|
-| 索引范围 | 只用 from～to 覆盖的日索引，禁止无脑 `logs-*` |
-| routing | 主路径按用户查：`routing=userId` 写入与查询一致 |
-| limit | 封顶 50/100 |
-| total | 默认不精确深 total；返回 hasMore / nextCursor |
-| 限流 | 列表接口比详情更严 |
+| 日索引 | 按 **eventTime** 命名并只搜 from～to 覆盖天 |
+| 主 filter | 必带 eventTime range；尽量带 module |
+| routing | 可选 `userId` 或 `module`（团队统一一种） |
+| limit | ≤ 50/100 |
+| total | 用 nextCursor/hasMore，慎用精确 deep hit count |
+| 限流 | 列表严于详情 |
 
-### 5.10 与冷存关系
+### 5.9 与冷存
 
-| 步骤 | 存储 |
+| 步骤 | 存哪 |
 |------|------|
-| 筛选 + 分页列表 | **仅 ES** |
-| 点开详情全文 | ES 摘要不足时 → **大文件** by logId |
+| 时间+模块列表 | ES |
+| file/line/preview | ES |
+| 完整附加内容 extra | **大文件** |
+| 详情 | logId → ES / 文件 |
 
-上报必须异步写 ES 索引字段；否则「网络日志」筛不出来。
-
-### 5.11 Node.js 列表示意（含条件）
+### 5.10 Node.js 列表示意
 
 ```js
-function buildFilters({ userId, from, to, category, level, pathPrefix, statusCode }) {
+function buildFilters({ from, to, module, file, line, userId }) {
   const filter = [
-    { term: { userId } },
-    { range: { ts: { gte: from, lte: to } } },
+    { range: { eventTime: { gte: from, lte: to } } },
   ];
-  if (category) filter.push({ term: { category } });       // network
-  if (level) filter.push({ term: { level } });
-  if (pathPrefix) filter.push({ prefix: { path: pathPrefix } });
-  if (statusCode != null) filter.push({ term: { statusCode } });
+  if (module) filter.push({ term: { module } });
+  if (file) filter.push({ term: { file } });
+  if (line != null) filter.push({ term: { line } });
+  if (userId) filter.push({ term: { userId } });
   return filter;
 }
 
 async function listLogs(params) {
   const pageSize = Math.min(params.limit ?? 50, 100);
-  const filtersHash = hashFilters(params); // 变条件则旧 cursor 作废
+  const filtersHash = hashFilters(params);
   const decoded = decodeCursor(params.cursor);
   if (decoded && decoded.filtersHash !== filtersHash) {
     throw badRequest("cursor does not match filters");
@@ -346,18 +340,23 @@ async function listLogs(params) {
     size: pageSize,
     query: {
       bool: {
-        filter: buildFilters({ ...params, from: window.start, to: window.end }),
-        ...(params.q ? { must: [{ match: { msgPreview: params.q } }] } : {}),
+        filter: buildFilters({
+          ...params,
+          from: window.start,
+          to: window.end,
+        }),
+        ...(params.q
+          ? { must: [{ match: { extraPreview: params.q } }] }
+          : {}),
       },
     },
-    sort: [{ ts: "desc" }, { logId: "asc" }],
-    _source: ["logId", "ts", "category", "level", "path", "statusCode", "msgPreview"],
+    sort: [{ eventTime: "desc" }, { logId: "asc" }],
+    _source: ["logId", "eventTime", "module", "file", "line", "extraPreview"],
   };
   if (searchAfter) body.search_after = searchAfter;
 
   const resp = await es.search({
-    index: indicesForWindow(window),
-    routing: params.userId,
+    index: indicesForWindow(window), // 按 eventTime 日索引
     body,
     request_timeout: "3s",
   });
@@ -378,20 +377,19 @@ async function listLogs(params) {
 }
 ```
 
-### 5.12 方案对照
+### 5.11 方案对照
 
 | 方案 | 适用 |
 |------|------|
-| filter + search_after | 条件筛选 + 翻页（主推） |
-| 时间切片 + 游标 | from/to 很长 |
-| 限制最大时间跨度 | 产品可接受时最省心 |
-| 网络日志独立索引 | network 流量大、控制台专用 |
-| PIT | 导出/长快照 |
-| from/size | 仅前几页 |
+| eventTime + module filter + search_after | 主查询（推荐） |
+| 时间切片 + 游标 | 跨度很长 |
+| file/line 辅 filter | 定位到具体代码行 |
+| extra 只 preview | 控索引体积 |
+| 按 module 拆索引 | 单模块流量极大时 |
 
-### 5.13 本节收口
+### 5.12 本节收口
 
-> **整个查询**：写入时原文进文件、维度进 ES → 列表用 **userId+时间+条件（如 network）** 做 filter 查询并 **search_after 分页** → 点详情用 **logId** 取全文（可回源）。时间长则切窗；改筛选必须重置 cursor。
+> 列 = **发生时间、功能模块、文件:行号、附加内容**。ES **主索引时间 + 模块**；列表 filter + **search_after(eventTime, logId)**；完整 extra 在大文件，详情用 logId 回源。改 module/时间等条件必须重置 cursor。
 
 ---
 
@@ -436,7 +434,7 @@ logs-2026.10.19   ← 回填写入当前热索引（别名 logs-hot）
 |------|-------|------|
 | 很多用户同时查（总流量） | **限流、连接数、超时** | 线程池/连接池 |
 | 同一 logId 详情回填 | 可辅助短缓存 | **互斥 / 幂等（主）** |
-| 列表（userId+时间+条件如 network） | **更严**限流 | filter + search_after + 时间切片 |
+| 列表（时间+module±file/line） | **更严**限流 | filter + search_after + 时间切片 |
 | 鉴权 | 可粗拦 | JWT/权限（主） |
 | 路由 | `location` 转发 | 业务路由 |
 
