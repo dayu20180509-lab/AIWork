@@ -379,17 +379,17 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 网关鉴权与限流；批量写入；Kafka 缓冲；乱序与重复；采样；隐私脱敏；回压策略。  
 （客户端出身可强调端上批量与服务端契约。）
 
-### I4. 日志已在大文件，按 logId 查：先 ES 后回源回填（Node.js）
+### I4. 日志已在大文件，按 logId 查 / 按 userId+时间列表分页（Node.js）
 
 **要点**：  
-- 大文件只写真相；ES 热层可丢；读路径 Cache-Aside（点查 `_id`）  
-- 同 logId 并发 miss：应用层 singleflight/锁 + ES 幂等写；Nginx 不能合并回源  
-- 多用户：Nginx `limit_req` 按 IP/用户；同 id：按 `$request_uri` 限流，可选短 `proxy_cache`（注意权限串缓存）  
-- ES 慢：Get by id、routing、控 `_source`、ILM 控体量  
-- 过期：按天索引 + ILM 保留 N 天（按命中率与磁盘调）  
-- **Node.js**：防堵 event loop；多实例 Redis NX 锁；上游超时+连接池；回源并发上限；大日志截断；ES 写失败仍返回文件内容  
+- 大文件只写真相；ES 热层可丢；点查 Cache-Aside（`_id`）  
+- 同 logId 并发 miss：singleflight/锁 + ES 幂等写；Nginx 不能合并回源  
+- **列表**：`userId`+`ts` filter；**search_after（ts+logId）** 游标；时间太长则**按天切片**或限制跨度；禁用深 from/size  
+- 多用户：Nginx 限流；列表接口限更严；按天缩索引范围  
+- 过期：ILM 保留 N 天，与可查窗口对齐  
+- **Node.js**：防堵 loop；Redis 锁；超时+连接池；回源并发上限  
 
-完整方案见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md)。
+完整方案见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) 第 5 节。
 
 ---
 
