@@ -459,7 +459,7 @@ async function listLogs(params) {
 
 ### 5.12 本节收口
 
-> 列 = **发生时间、功能模块、文件:行号、附加内容**。ES **主索引时间 + 模块**；列表 filter + **search_after(eventTime, logId)**；完整 extra 在大文件，详情用 logId 回源。改 module/时间等条件必须重置 cursor。
+> 列 = **发生时间、功能模块、文件:行号、附加内容**。module **高重复**、extra **低重复** ⇒ 主索引仍是 **时间+模块**（够用做列表），靠时间窗+分页消化重复；**禁止**用完整 extra 当列表主索引。file/line 辅筛；详情 logId 回源。
 
 ---
 
@@ -777,7 +777,8 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 |------|------|
 | 列表筛不出某模块 | 上报必须写准 `module`/`eventTime` 进 ES |
 | **时间+模块分页** | filter；**search_after(eventTime,logId)**；改条件重置 cursor；切窗 |
-| extra 撑爆索引 | 全文进文件，ES 只 `extraPreview` |
+| extra 撑爆索引 | 全文进文件，ES 只 `extraPreview`（extra 越不重复越不该主索引） |
+| 只选 module 不选时间 | **不够**；产品强制时间范围（module 高重复） |
 | 条件用 match 扫全体 | module/file 用 term；关键字只打 preview |
 | 并发 miss 打穿文件服务 | 详情路径互斥回填 + `_id` 幂等 |
 | 多用户总流量过大 | Nginx 限流；列表接口更严 |
@@ -795,8 +796,8 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 
 ## 11. 面试收口
 
-> 日志列：**发生时间、功能模块、文件:行号、附加内容**。ES **以 eventTime + module 为主索引维度**做 filter 列表，并用 **search_after(eventTime, logId)** 分页；跨度大则按天切窗。file/line 作辅筛，extra 全文放文件、ES 只 preview。  
-> **logId 详情回源**；写入时维度必须进 ES。Nginx 严限列表；Node 管超时/连接池/singleflight；ILM 对齐可查窗口。
+> **时间+模块做主索引够不够？** module 高重复 → 必须带时间窗 + 分页，这样够用；extra 几乎不重复 → 更不该当列表主索引，放文件。  
+> 列表：eventTime+module filter + search_after；详情：logId 回源。Nginx/Node 限流与超时照旧。
 
 ---
 
