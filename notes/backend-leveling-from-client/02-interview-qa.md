@@ -379,6 +379,17 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 网关鉴权与限流；批量写入；Kafka 缓冲；乱序与重复；采样；隐私脱敏；回压策略。  
 （客户端出身可强调端上批量与服务端契约。）
 
+### I4. 日志已在大文件，按 logId 查：先 ES 后回源回填
+
+**要点**：  
+- 大文件只写真相；ES 热层可丢；读路径 Cache-Aside（点查 `_id`）  
+- 同 logId 并发 miss：应用层 singleflight/锁 + ES 幂等写；Nginx 不能合并回源  
+- 多用户：Nginx `limit_req` 按 IP/用户；同 id：按 `$request_uri` 限流，可选短 `proxy_cache`（注意权限串缓存）  
+- ES 慢：Get by id、routing、控 `_source`、ILM 控体量  
+- 过期：按天索引 + ILM 保留 N 天（按命中率与磁盘调）  
+
+完整方案见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md)。
+
 ---
 
 ## J. 行为与学习方法（对齐专栏面试/学习篇）
