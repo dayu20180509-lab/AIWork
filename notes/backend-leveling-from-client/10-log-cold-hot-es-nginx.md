@@ -1,7 +1,8 @@
 # 日志冷热架构：大文件 + ES 回填 + Nginx 限流
 
 > 场景：日志已写入**大文件系统（只写追加）**；前端按 **logId** 调接口；后端先查 **ES**，没有则回源文件系统再**回填 ES**。  
-> 本文合并：读路径设计、并发写、ES 查询慢、ES 过期，以及 **Nginx 多用户查询 / 同 logId 查询** 怎么配、和后端如何配合。
+> 后台 API 以 **Node.js** 实现为例。  
+> 本文合并：读路径设计、并发写、ES 查询慢、ES 过期、**Nginx 多用户/同 logId**，以及 **Node.js 落地难点**。
 
 ---
 
@@ -282,7 +283,135 @@ UserA/B/C → Nginx（URI 限流通过）
 
 ---
 
-## 8. 难点汇总（面试用）
+## 8. Node.js 后台难点（本场景专项）
+
+Node.js 适合 IO 密集的「查 ES / 读文件 / 写 ES」，但单线程事件循环 + 默认内存模型会在这套冷热架构里踩坑。下面按**会出事的点**写。
+
+### 8.1 事件循环被堵住（CPU / 同步重活）
+
+| 风险 | 表现 | 对策 |
+|------|------|------|
+| 大日志 JSON.parse / 正则脱敏在请求里同步做 | 延迟尖刺、全进程 QPS 掉 | 限制正文大小；大处理丢 Worker Thread / 独立清洗服务；只把摘要进 ES |
+| 压缩/加解密/超大 stringify | 同上 | 流式处理；能不下载全文就不下载 |
+| 同步 fs / 同步 crypto | 卡死 loop | 一律 async API |
+
+面试句：Node 擅长等网络，不擅长在请求路径里啃 CPU。
+
+### 8.2 并发回填：进程内 singleflight + 多实例锁
+
+Node 单进程内可用内存 Map 做 **singleflight**（同 logId 共用一个 Promise）：
+
+```js
+// 示意：同 logId 合并成一次回源
+const inflight = new Map();
+
+async function getLog(logId) {
+  const cached = await esGet(logId);
+  if (cached) return cached;
+
+  if (inflight.has(logId)) return inflight.get(logId);
+
+  const p = (async () => {
+    const locked = await redis.set(`backfill:${logId}`, "1", "EX", 30, "NX");
+    try {
+      if (!locked) {
+        await sleep(50);
+        return (await esGet(logId)) ?? fileGet(logId); // 降级：读文件可不写 ES
+      }
+      const body = await fileGet(logId);
+      try { await esIndex(logId, body); } catch (e) { metrics.esWriteFail++; }
+      return body;
+    } finally {
+      inflight.delete(logId);
+      if (locked) await redis.del(`backfill:${logId}`);
+    }
+  })();
+
+  inflight.set(logId, p);
+  return p;
+}
+```
+
+难点：
+
+- **多进程 / 多机**：仅靠 Map 不够，要 **Redis SET NX**（或 etcd）  
+- **锁释放**：进程崩溃要靠锁 TTL；业务超过 TTL 要续期或接受偶发重复回源  
+- **Promise 泄漏**：`finally` 里必须 `inflight.delete`  
+
+### 8.3 超时、取消与「Nginx 已断开」
+
+| 难点 | 对策 |
+|------|------|
+| 文件服务慢，Node 还在等 | `AbortController` + 超时（如 2s）；与 Nginx `proxy_read_timeout` 对齐 |
+| 客户端取消，回填仍继续 | 区分「响应已取消」与「回填是否继续」；可改为队列异步回填 |
+| 无超时的 fetch/axios | 所有出口（ES、文件、Redis）必须设 timeout |
+
+超时预算示例：
+
+```text
+Nginx read 5s
+  └─ API 总预算 4s
+       ├─ ES get  ≤ 200ms
+       ├─ 文件    ≤ 2s
+       └─ ES index≤ 500ms（可异步，失败不影响返回）
+```
+
+### 8.4 连接池与「打开太多连接」
+
+Node 默认对上游并发高时易打满：
+
+- `http.Agent` / `undici` / ES client：设 `keepAlive`、`maxSockets` / 连接上限  
+- ES 官方 Client、文件服务 HTTP 客户端都要**显式池化**，并计入连接池总账  
+- 避免每个请求 `new Client()`  
+
+### 8.5 大 body 与内存
+
+| 难点 | 对策 |
+|------|------|
+| 一次把几百 MB 日志读进 Buffer | 流式读取；ES 只存截断摘要；全文跳转文件 URL（若权限允许） |
+| 多个 miss 并发 × 大文件 = RSS 爆 | **限制进程内并发回源**（如 p-limit=10）；Nginx/应用双限流 |
+| V8 老生代涨、GC 卡顿 | 监控 heap；拒绝超限 log 入 ES `_source` |
+
+### 8.6 错误处理与 async 陷阱
+
+- 未处理的 Promise rejection 可能打挂进程 → 统一封装、`error` 中间件  
+- ES 写失败：**仍返回文件内容**，只打指标，勿把整请求变成 500  
+- 文件 404 vs ES 5xx 映射清晰，避免全变 500  
+
+### 8.7 与集群模式
+
+| 部署 | 注意 |
+|------|------|
+| `cluster` 多进程 或 K8s 多 Pod | singleflight 必须外置锁 |
+| 单进程 PM2 | 同上，多实例仍要 Redis 锁 |
+| 无状态水平扩 | Session 不放内存；限流可 Nginx + Redis |
+
+### 8.8 观测（Node 特别要补的）
+
+- `event loop lag`（卡顿秒杀一切优化）  
+- 活跃句柄 / 连接数、heap used  
+- `es_hit`、`backfill_inflight`、`file_rt_p99`、`es_write_fail`  
+- 结构化日志 + `request_id`（与 Nginx `$request_id` 透传）  
+
+### 8.9 Node 技术选型提示（本场景）
+
+| 能力 | 常见选择 |
+|------|----------|
+| HTTP 框架 | Fastify / Express + 超时中间件 |
+| ES | `@elastic/elasticsearch`（关掉乱重试或限制重试） |
+| 锁 / 短缓存 | ioredis |
+| 并发上限 | p-limit / bottleneck |
+| 指标 | prom-client |
+
+ES 客户端注意：默认重试可能在故障时**放大流量**；对点查与回填要收敛重试策略（呼应弹力：重试 + 熔断 + 幂等）。
+
+### 8.10 Node 难点一句话
+
+> IO 模型合适，但要用 **singleflight+Redis 锁** 防同 id 惊群，用 **超时/连接池/回源并发上限** 防打爆自己和上游，用 **流式与摘要** 防大日志撑爆内存，并盯 **event loop lag**。
+
+---
+
+## 9. 难点汇总（面试用）
 
 | 难点 | 对策 |
 |------|------|
@@ -294,17 +423,22 @@ UserA/B/C → Nginx（URI 限流通过）
 | 缓存串权 | 带权限则勿盲目 proxy_cache，或 key 含 userId |
 | ES 写失败 | 仍返回文件内容；指标告警 |
 | 穿透非法 id | 校验 + 负缓存 |
+| **Node 阻塞 loop** | 禁止请求路径重 CPU；大日志截断/Worker |
+| **Node 多实例惊群** | Map singleflight + Redis NX 锁 |
+| **Node 内存/连接打满** | 回源并发上限 + Agent 连接池 + 超时预算 |
 
 ---
 
-## 9. 面试收口
+## 10. 面试收口
 
-> 大文件是只写真相；ES 是可 ILM 过期的热层。读路径 Cache-Aside，点查走 `_id`。同 logId 并发 miss 靠应用层互斥与幂等回填；Nginx 用 IP/用户限流扛多用户，用 URI 限流（和可选短缓存）抑制单 id 毛刺，但不替代后端 singleflight。ES 过期用滚动索引 + ILM，按命中率与磁盘选保留天数。
+> 大文件是只写真相；ES 是可 ILM 过期的热层。读路径 Cache-Aside，点查走 `_id`。同 logId 并发 miss 靠应用层互斥与幂等回填；Nginx 用 IP/用户限流扛多用户，用 URI 限流（和可选短缓存）抑制单 id 毛刺，但不替代后端 singleflight。ES 过期用滚动索引 + ILM，按命中率与磁盘选保留天数。  
+> **Node.js** 侧重点：事件循环不被大 JSON/脱敏堵住；多实例用 Redis 锁合并回源；所有上游设超时与连接池；限制并发回源与 `_source` 大小；ES 写失败降级返回文件内容，并监控 event loop lag。
 
 ---
 
-## 10. 相关文档
+## 11. 相关文档
 
-- [02-interview-qa.md](./02-interview-qa.md) — 缓存击穿、限流、网关相关题  
+- [02-interview-qa.md](./02-interview-qa.md) — 缓存击穿、限流、网关相关题；场景题 I4  
 - [08-l4-distributed-resilience-performance.md](./08-l4-distributed-resilience-performance.md) — 弹力与限流  
 - [06-l2-professional-fundamentals.md](./06-l2-professional-fundamentals.md) — Cache-Aside  
+
