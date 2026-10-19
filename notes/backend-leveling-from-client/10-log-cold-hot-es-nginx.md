@@ -705,9 +705,10 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 
 | 难点 | 对策 |
 |------|------|
-| 列表无数据/筛不出网络日志 | 上报必须写 ES 维度字段（category 等） |
-| **userId+时间+条件分页** | filter 叠条件；**search_after**；改筛选重置 cursor；时间切片 |
-| 条件用 match 扫全体 | 枚举/ID 用 term；关键字限字段 |
+| 列表筛不出某模块 | 上报必须写准 `module`/`eventTime` 进 ES |
+| **时间+模块分页** | filter；**search_after(eventTime,logId)**；改条件重置 cursor；切窗 |
+| extra 撑爆索引 | 全文进文件，ES 只 `extraPreview` |
+| 条件用 match 扫全体 | module/file 用 term；关键字只打 preview |
 | 并发 miss 打穿文件服务 | 详情路径互斥回填 + `_id` 幂等 |
 | 多用户总流量过大 | Nginx 限流；列表接口更严 |
 | 单 logId 被刷 | Nginx 按 `$request_uri` 限流 |
@@ -724,9 +725,8 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 
 ## 11. 面试收口
 
-> **主入口是 userId + 时间范围 + 可选条件（如 category=network）**，在 ES 上用 bool filter 查摘要列表，并用 **search_after** 分页；时间长则切窗。改筛选必须重置 cursor。  
-> **logId 用于详情**：ES miss 再回源大文件并回填。原文在文件，检索维度必须在写入时进 ES，否则网络日志等筛选项无解。  
-> Nginx 严限列表；Node 做超时、连接池、详情 singleflight；ILM 保留天数对齐可查窗口。
+> 日志列：**发生时间、功能模块、文件:行号、附加内容**。ES **以 eventTime + module 为主索引维度**做 filter 列表，并用 **search_after(eventTime, logId)** 分页；跨度大则按天切窗。file/line 作辅筛，extra 全文放文件、ES 只 preview。  
+> **logId 详情回源**；写入时维度必须进 ES。Nginx 严限列表；Node 管超时/连接池/singleflight；ILM 对齐可查窗口。
 
 ---
 

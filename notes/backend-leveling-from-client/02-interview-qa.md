@@ -379,13 +379,13 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 网关鉴权与限流；批量写入；Kafka 缓冲；乱序与重复；采样；隐私脱敏；回压策略。  
 （客户端出身可强调端上批量与服务端契约。）
 
-### I4. 日志查询：userId+时间+条件筛选分页 / logId 详情回源（Node.js）
+### I4. 日志查询：时间+功能模块索引分页 / logId 详情回源（Node.js）
 
 **要点**：  
-- **主路径**：`userId` + 时间 + 条件（如 `category=network`）→ ES bool **filter** + **search_after** 分页；改筛选重置 cursor；时间长则切窗  
-- 写入时原文进大文件、维度进 ES，否则筛不出网络日志等  
-- **详情**：logId → ES get，miss 回源文件并回填（singleflight）  
-- Nginx 列表限流更严；ILM 与可查窗口对齐；Node 超时/连接池/防堵 loop  
+- 列：`eventTime`、`module`、`file`/`line`、`extra`；ES **主索引时间+模块**  
+- **主路径**：时间范围 + `module`（如 network）± file/line → filter + **search_after(eventTime, logId)**；改条件重置 cursor；长跨度切窗  
+- `extra` 全文在大文件，ES 只 preview  
+- **详情**：logId → ES / miss 回源回填；Nginx 严限列表；Node 超时/池/singleflight  
 
 完整方案见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md)。
 
