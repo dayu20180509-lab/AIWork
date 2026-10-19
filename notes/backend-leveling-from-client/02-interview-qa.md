@@ -379,15 +379,15 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 网关鉴权与限流；批量写入；Kafka 缓冲；乱序与重复；采样；隐私脱敏；回压策略。  
 （客户端出身可强调端上批量与服务端契约。）
 
-### I4. 日志查询：时间+功能模块索引分页 / logId 详情回源（Node.js）
+### I4. 日志查询：时间+功能模块索引是否够用 / 分页与详情（Node.js）
 
 **要点**：  
-- 列：`eventTime`、`module`、`file`/`line`、`extra`；ES **主索引时间+模块**  
-- **主路径**：时间范围 + `module`（如 network）± file/line → filter + **search_after(eventTime, logId)**；改条件重置 cursor；长跨度切窗  
-- `extra` 全文在大文件，ES 只 preview  
-- **详情**：logId → ES / miss 回源回填；Nginx 严限列表；Node 超时/池/singleflight  
+- 列：`eventTime`、`module`（**高重复**）、`file`/`line`、`extra`（**几乎不重复**）  
+- **判断**：时间+模块做列表主索引 **够用**（须强制时间窗 + search_after）；module 不能单独查；extra **不要**当主索引，全文进文件  
+- 列表：filter(eventTime, module, …) + search_after；详情 logId 回源  
+- 见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) §1.3 / §5  
 
-完整方案见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md)。
+完整方案见该文档。
 
 ---
 
