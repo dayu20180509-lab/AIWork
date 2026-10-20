@@ -391,6 +391,76 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 
 完整方案见该文档。
 
+### I5. 本项目相关的 Node.js 面试题（日志冷热查询）
+
+> 场景锚点：Node 做 Log Query API；HDFS=`userId→最近一次上报`；ES=列表瘦索引；Redis=warm/锁。
+
+#### N1. 为什么用 Node 做这个查询服务？有什么风险？
+
+**参考答**：  
+适合 IO 密集（等 HDFS / ES / Redis）。风险：单线程 event loop，JSON 解析大包、同步压缩会堵全进程；多实例下内存 Map 锁不够。  
+对策：流式解析、Worker 卸 CPU、超时、连接池、Redis 分布式锁。
+
+#### N2. 同一 userId 多人同时查冷数据，Node 怎么防惊群？
+
+**参考答**：  
+进程内 `Map` singleflight（同 `userId+uploadId` 共用 Promise）+ Redis `SET NX` 回填锁；首屏可共享；Bulk 异步。只靠进程内 Map 在多 Pod 下无效。
+
+#### N3. Bulk 瘦文档是什么？为什么不把完整 extra 进 ES？
+
+**参考答**：  
+`toThinDoc` 去掉完整 `extra`，只留时间/模块/file/line/preview/userId；Bulk 一批写入。  
+extra 基数高、体积大，进 ES 会撑爆倒排与 `_source`；列表不需要全文，全文再读 HDFS 包匹配。  
+**作用**：冷→热后列表走 ES filter，不再每次拉包。
+
+#### N4. 首屏如何快速返回？和 Bulk 的关系？
+
+**参考答**：  
+拉最新上报包 → 流式过滤 → **凑满一页先 `return`**；命中行 **异步 enqueueBulk**，不 await 整包进 ES。  
+第二次请求看 Redis `warm:{userId}:{uploadId}`，走 ES。
+
+#### N5. warm / 回填状态为什么放 Redis 不放内存？
+
+**参考答**：  
+多实例要共享「是否已灌、谁在灌」；进程重启不能丢锁导致惊群。key 必须带 `uploadId`，新上报后旧 warm 失效。
+
+#### N6. 用户先查 network 再查 route，Node 侧怎么优化？
+
+**参考答**：  
+同一 `getLatestUpload(userId)` 只拉一次；解析时侧写包内所有 module 瘦文档；当前 module 优先凑页。listKey 含 module，结果缓存不串。
+
+#### N7. event loop 在本场景最容易被什么堵死？
+
+**参考答**：  
+整包同步 `JSON.parse`、大字符串正则脱敏、同步读文件、超大 `JSON.stringify` 响应。  
+改为流式按行 parse、限制 preview 长度、全文单独接口、监控 event loop lag。
+
+#### N8. 如何设计超时预算（对齐 Nginx）？
+
+**参考答**：  
+例：Nginx `proxy_read_timeout` 5s → API 总预算 4s → ES ≤200ms，HDFS 流式首屏尽量短，Bulk 不计入用户路径。客户端断开后回填可改队列异步，避免无限挂起。
+
+#### N9. ES / HDFS 客户端连接要注意什么？
+
+**参考答**：  
+共用带 `keepAlive` 的 Agent；设 `maxSockets`；禁止每请求 `new Client()`；ES 客户端限制重试防故障放大；计入连接池总账。
+
+#### N10. 展开全文时 Node 做什么、不做什么？
+
+**参考答**：  
+再取（或缓存）该 user 最新包，用列表行字段匹配返回 `extra`。  
+**不** `es.index` 全文、**不**用 logId/fileUri。同包展开可 singleflight，并按 user 限流。
+
+#### N11. 如何观测这套 Node 服务？
+
+**参考答**：  
+`event_loop_lag`、heap、HDFS/ES RT与错误率、`backfill_inflight`、warm 命中率、Bulk 429、列表 P99；日志带 `request_id`（透传 Nginx）。
+
+#### N12. 手写一段 singleflight + Redis 锁的思路（口述即可）
+
+**参考答**：  
+`inflight.get(key) ?? 创建 Promise`；Promise 内 `SET key NX EX`；拿到锁则拉包/Bulk/SET warm；否则 sleep 轮询 warm；`finally` 删除 inflight 与锁。key=`userId:uploadId`。
+
 ---
 
 ## J. 行为与学习方法（对齐专栏面试/学习篇）

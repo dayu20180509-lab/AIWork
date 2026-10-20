@@ -111,6 +111,48 @@ _id = hash(userId, eventTime, module, file, line, extraPreview)
 
 mapping 不再含 `fileUri` / `logId`。
 
+### 2.2.1 Bulk 瘦文档是怎么「起作用」的
+
+两件事叠在一起：**瘦** = 每条 payload 小；**Bulk** = 很多条一次发给 ES。
+
+```text
+HDFS 上报包内一行（胖）
+  eventTime, module, file, line, userId, extra(可能很大)
+        │
+        ▼ toThinDoc
+ES 瘦文档（小）
+  eventTime, module, file, line, userId, extraPreview(截断)
+  —— 丢掉完整 extra ——
+        │
+        ▼ 凑满 500～2000 条
+ES Bulk API 一次提交
+  { index: {_index, _id: rowKey} }
+  { ...thin... }
+  { index: ... }
+  { ...thin... }
+  …
+```
+
+| 环节 | 起什么作用 |
+|------|------------|
+| **丢掉 extra** | 索引体积、倒排、`_source`、merge、堆内存都小；列表本来也不展示全文 |
+| **只留主维+preview** | 之后 `filter(userId+时间+module)` + 分页能直接在 ES 完成，**不必再拉 HDFS 包** |
+| **Bulk 一批写** | 比逐条 `index` 少几十～上百倍 HTTP/刷新开销；回填吞吐上去 |
+| **`_id=rowKey` 幂等** | 同一行灌两次是覆盖/冲突，不产生重复文档；惊群重试安全 |
+| **异步 Bulk + 首屏直出** | 用户先拿到内存筛好的一页；ES 在后台变热，**第二次查询走 ES 才「感受到」瘦文档的收益** |
+
+对查询路径的效果（第一次 vs 第二次）：
+
+```text
+冷（无瘦文档）：userId → HDFS 最新包 → 内存过滤 → 返回
+                └─ 同时 Bulk 瘦文档进 ES，Redis 打 warm
+
+热（有瘦文档）：list 条件 → ES search_after → 返回
+                └─ 不再读 HDFS（除非展开全文再取包）
+```
+
+一句话：**瘦文档让「列表要的字段」廉价地住在 ES 里；Bulk 让这次搬家搬得快；warm 之后列表才稳定享受 ES 速度。**
+
 ### 2.3 列表 query 契约
 
 ```text
@@ -415,7 +457,7 @@ A/B/C 同 userId 查 module=network
 
 > **列表 query**：`userId + 时间 + module + 筛选`，无 logId、无 fileUri。  
 > **HDFS**：`getLatestUpload(userId)` —— 用户最近一次上报的日志包。  
-> **ES**：列表 miss 时从该包过滤后 Bulk 瘦文档。  
+> **ES**：列表 miss 时从该包过滤后 Bulk 瘦文档；**warm/锁在 Redis（含 uploadId）**。  
 > **全文**：再取同包，用行字段匹配；不写 ES。
 
 ---

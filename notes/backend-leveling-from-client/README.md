@@ -8,7 +8,7 @@
 |------|------|
 | [00-full-copy-pack.md](./00-full-copy-pack.md) | **完整可复制合集**：展开 01 内全部链接（主攻略 + L0～L5 详解 + 面试题） |
 | [01-leveling-guide.md](./01-leveling-guide.md) | 后端开发练级路线（L0→L5）+ 专栏对照 + 实践项目 |
-| [02-interview-qa.md](./02-interview-qa.md) | 后端面试题与参考答案（按主题分层） |
+| [02-interview-qa.md](./02-interview-qa.md) | 后端面试题与参考答案（含日志场景 I4 + **Node.js 专项 I5**） |
 | [03-minimal-backend-stack.md](./03-minimal-backend-stack.md) | L0 最小后端栈详解（路由/配置/日志/探活/Docker） |
 | [04-l1-entry-and-craft.md](./04-l1-entry-and-craft.md) | L1 后端入门与修养详解（规范/工具链/SQL/项目 B） |
 | [05-relational-db-basics.md](./05-relational-db-basics.md) | L1 关系数据库基础（表设计/索引/事务/迁移） |
