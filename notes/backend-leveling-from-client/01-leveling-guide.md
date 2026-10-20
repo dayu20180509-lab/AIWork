@@ -81,11 +81,12 @@
 
 ### 必学
 
-1. **HTTP 再学一遍（服务端视角）**  
+1. **HTTP 再学一遍（服务端视角）**（详解 + Node 落地见 [11-http-server-nodejs.md](./11-http-server-nodejs.md)）  
    - 方法语义：GET 安全幂等；PUT/DELETE 幂等；POST 不幂等（需设计幂等键）  
    - 状态码分层：2xx 成功 / 4xx 客户端错 / 5xx 服务端错  
    - Header：`Authorization`、`Idempotency-Key`、`ETag`/`If-None-Match`、分页与限流头  
-   - 客户端经验映射：你写的重试逻辑，后端必须配合幂等与正确状态码
+   - 客户端经验映射：你写的重试逻辑，后端必须配合幂等与正确状态码  
+   - Node：Method 路由、鉴权/幂等中间件、统一错误、`Retry-After`、与日志项目 GET 回填的关系
 
 2. **选一门后端主语言（建议三选一）**  
    - **Go**：部署简单、并发模型清晰，适合服务端入门（专栏对 Go/Docker 有专门讨论）  
