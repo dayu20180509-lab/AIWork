@@ -3783,10 +3783,9 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 
 **要点**：  
 - 列：`eventTime`、`module`（**高重复**）、`file`/`line`、`extra`（**几乎不重复**）  
-- **列表 query**：**userId + from/to + module + 可选筛选**；**没有 logId**  
-- **判断**：时间+模块做列表主索引 **够用**（须强制时间窗 + search_after）；extra **不要**当主索引  
-- **ES 写入**：仅列表 miss → HDFS 扫窗 → Bulk 瘦文档（无按 id 点级回填）  
-- **全文**：**fileUri → HDFS**；不做 logId 详情回溯，展开全文不写 ES  
+- **列表 query**：**userId + from/to + module + 可选筛选**；**无 logId、无 fileUri**  
+- **HDFS**：**userId → 最近一次上报包**；包内过滤；列表 miss → Bulk 瘦文档  
+- **全文**：再取同包行匹配；不写 ES  
 - 见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) §1 / §3 / §5  
 
 完整方案见该文档。
