@@ -3790,6 +3790,11 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 
 完整方案见该文档。
 
+### I5. 本项目相关的 Node.js 面试题（日志冷热查询）
+
+详见分册 [02-interview-qa.md](./02-interview-qa.md) **I5（N1～N12）**：singleflight/Redis 锁、Bulk 瘦文档、首屏快返、warm 状态、换 module、event loop、超时预算、连接池、全文不写 ES、观测等。  
+架构正文见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) §2.2.1 / §3.3。
+
 ---
 
 ## J. 行为与学习方法（对齐专栏面试/学习篇）
