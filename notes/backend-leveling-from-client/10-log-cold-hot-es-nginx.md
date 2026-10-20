@@ -266,43 +266,121 @@ list(queryKey):
 ```text
 查询
   → ES 命中？→ 只读，不写
-  → miss？→ 读 HDFS → 解析热字段 → 写 ES →（再 search / 或直接返回）
+  → miss？→ 读 HDFS → 边筛边写 ES → 首屏尽快回客户端（见下「快返」）
 ```
+
+#### A0. 快返主路径（首屏不等「整段灌完 ES」）
+
+场景：用户带条件查某一段（`from/to` + `module` + 可选 file/line/q）；HDFS 上是 **近几天完整日志**（未按 module 拆好）；ES 还是冷的。
+
+**错误做法（慢）**：扫完近几天全部 → 全量写入 ES → refresh → 再 search 过滤 → 才返回。首屏 RT = 全量扫盘 + 全量索引。
+
+**正确做法（快）**：
+
+```text
+1. 分区裁剪：只打开 from/to 覆盖的日/小时目录（近几天里只碰相关桶）
+2. 流式读 HDFS → 内存里按查询条件 filter（module / file / line / q）
+3. 双通道并行：
+     ├─ 快通道：凑满 pageSize 条「已筛选」瘦结果 → 立刻返回客户端（本页不经过 ES）
+     └─ 慢通道：命中行持续 Bulk 进 ES；未命中行直接丢弃（不写 ES）
+4. 段锁保证同一 segKey 只有一路在扫；其它请求等 warm 或共享同一路产出的首屏缓存
+5. 首屏返回后：后台继续灌完该桶匹配行 → markWarm → 翻页走 ES（3.2）
+```
+
+时序示意：
+
+```text
+Client                API                     HDFS              ES
+  |-- list(filter) -->|
+  |                   |-- open day/hour dirs ->|
+  |                   |<-- stream lines -------|
+  |                   |  parse + filter(module…)
+  |                   |  page[] += hit
+  |                   |  bulkQueue += thinDoc ----bulk-->|  (异步，不挡)
+  |                   |  page满？── return page ──>|
+  |<== 首屏 JSON =====|  (此时 ES 可能只写了一部分)
+  |                   |  continue scan+bulk… ----------->|
+  |                   |  markWarm(segKey)
+  |-- page2 --------->|  es.search(search_after) ------->|
+  |<== 次页从 ES =====|
+```
+
+| 环节 | 怎么快 |
+|------|--------|
+| **HDFS 读** | 按 `eventTime` 分区目录裁剪；按排序方向优先扫「最新桶」（列表常倒序）；并行打开少量文件，但全局 seg 仍单飞 |
+| **筛选** | **读时过滤**：完整日志里只有命中 `module` 等条件的行才进入 page / Bulk；不要先全量进 ES 再筛 |
+| **写 ES** | 只写命中行的 **瘦文档**；500～2000 条一刷；`_id=logId`；灌的过程中 **不 await 整段结束** |
+| **回传客户端** | **首屏 = 内存里筛好的 page**，路径是 HDFS→API→Client；禁止「等整段 Bulk + refresh 再 search」挡首屏 |
+| **次页及以后** | 若 `warm` 已亮或 ES 已够命中 → 走 ES；若仍在灌 → 可继续 HDFS 游标翻页，或短等 refresh |
+
+首屏响应形状（概念）：
+
+```json
+{
+  "items": [ { "eventTime", "module", "file", "line", "extraPreview", "logId" } ],
+  "nextCursor": "…",
+  "source": "hdfs_stream",
+  "backfill": { "segKey": "…", "status": "running" }
+}
+```
+
+`source=hdfs_stream` 时：本页排序依赖 **HDFS 文件内时间序 + 扫桶顺序**（需与产品约定一致，通常新→旧按小时桶倒序扫）。  
+`source=es` 时：排序与 search_after 由 ES 保证；warm 之后应尽量切到 ES，避免两套分页语义长期并存。
+
+**快写 ES 的要点（仅写筛选命中）**：
+
+```text
+onHit(row):
+  thin = { eventTime, module, file, line, extraPreview, logId, fileUri }  // 无完整 extra
+  bulkBuffer.push(thin)
+  if bulkBuffer.length >= N:
+      es.bulk(bulkBuffer)   // fire-and-forget / 有界队列，失败重试+幂等
+      bulkBuffer.clear()
+
+// 不要：
+//   - 把近几天未筛选的完整行 bulk 进 ES
+//   - 首屏 await es.refresh() + es.search()
+```
+
+若产品强依赖「首屏也必须走 ES」（少见）：至少 **先 Bulk 当前页命中 → `refresh` 该索引 → search 仅这一页条件**，仍不要等整段灌完；但 RT 通常差于「内存直出首屏」。
 
 #### A. 列表段级回填（同一段最容易惊群）
 
-多人同时打开同一时间窗 + 同一 module，且 ES 还是冷的：
+多人同时打开同一时间窗 + 同一 module，且 ES 还是冷的。默认走 **A0 快返**；下面是合流与灌完后的完整控制面：
 
 ```text
-list(from, to, module):
-  if segmentWarm(from,to,module) or es.hasEnoughHits(...):
-      return es.search(...)           // 走 3.2
+list(from, to, module, …filters):
+  if segmentWarm(...) or es.hasEnoughHits(...):
+      return es.search(...)                 // 走 3.2，快
 
-  // 冷段：只允许一路从 HDFS 灌 ES
-  if tryLock("backfill:seg:"+segKey):   // segKey=hash(from,to,module) 或按小时桶
-      rows = hdfs.scan(partition=时间分区, filter=module)  // 流式读，勿一次载入内存
-      for chunk in rows.batches(500~2000):
-          es.bulk(index=日索引, docs=toThinDocs(chunk))   // _id=logId，幂等
-      markWarm(segKey, ttl=与 ILM 对齐或略短)
+  if tryLock("backfill:seg:"+segKey):
+      // A0：流式扫裁剪后的分区
+      for line in hdfs.stream(dirs=prune(from,to), order=desc):
+          if !match(line, filters): continue
+          pushPageOrCursor(line)            // 凑满 page → 可先 return（同 seg 共享）
+          enqueueBulk(toThinDoc(line))      // 异步写 ES
+      flushBulk(); optional refresh
+      markWarm(segKey)
       unlock
-      return es.search(...)           // refresh 后可 search；或 bulk 后主动 refresh 该索引
   else:
-      await warm or 轮询短等待 → es.search(...)
-      // 超时：可降级「直接流式扫 HDFS 返回本页」，并异步继续回填（见下）
+      // 别人正在灌：等首屏缓存 / warm；超时则本请求自己扫一页（只读 HDFS，不抢写锁）
+      return waitSharedFirstPage() or hdfsScanOnePage(filters)
 ```
 
 | 优化 | 做法 | 为什么 |
 |------|------|--------|
 | **段锁 / Singleflight** | 同一 `segKey` 全局只跑 1 个 HDFS→ES 任务 | 避免 N 路重复扫盘、重复 Bulk |
-| **按时间桶切段** | 不要一次回填「7 天×全 module」；按 **小时/天桶** + 当前 module 灌 | 控制单次 HDFS 扫描与 Bulk 体积 |
+| **分区裁剪** | HDFS 虽有近几天完整日志，只打开 `from/to` 覆盖的日/小时路径 | 扫盘量从「近几天全部」降到「查询窗」 |
+| **读时过滤再写** | 完整行在 API 侧 filter；**只有命中才 Bulk** | ES 只热「用户要的那段条件」，写得快、索引小 |
+| **首屏直出** | page 满即返回；不等整段 Bulk/refresh | 快返用户 |
+| **按时间桶切段** | 不要一次回填「7 天×全量」；按 **小时/天桶** + module 灌 | 控制单次扫描与 Bulk 体积 |
 | **流式 + 小 Bulk** | HDFS 流式读 → 500～2000 条一刷 ES | 控 Node 内存；比逐条 index 快一个数量级 |
 | **瘦文档** | 只写 eventTime/module/file/line/extraPreview/logId/fileUri；**完整 extra 留 HDFS** | 回填写放大小，列表够用 |
 | **幂等 `_id=logId`** | `create` 或 index 覆盖 | 两路回填重叠、重试均安全 |
-| **回填与查询节奏** | Bulk 期间可调高该索引 `refresh_interval`；段灌完再 `refresh` 一次供列表 | 减少 merge 抖动 |
-| **背压** | ES 429 / HDFS 慢 → 暂停 Bulk、延长锁持有方退避；全局 **回填并发上限**（同时只热 N 个 seg） | 保护双集群 |
-| **温标记** | Redis：`warm:{segKey}`；或 ES 侧「探测 count>阈值」 | 第二次列表不再扫 HDFS |
-| **降级** | 回填太慢：本请求直接从 HDFS 拼一页返回，ES 回填改异步队列 | 用户不被长回填卡住 |
-| **切窗强迫** | 产品限制最大查询跨度；跨度大先切窗再逐窗回填 | 防止一次 miss 引爆全量 HDFS 扫描 |
+| **回填与查询节奏** | Bulk 异步；段灌完或翻页需要时再 `refresh` | 减少 merge 抖动，不挡首屏 |
+| **背压** | ES 429 / HDFS 慢 → 暂停 Bulk；全局 **回填并发上限** | 保护双集群；首屏仍可只靠 HDFS 页 |
+| **温标记** | Redis：`warm:{segKey}`；或 ES count 探测 | 第二次列表不再扫 HDFS |
+| **切窗强迫** | 产品限制最大查询跨度；跨度大先切窗再逐窗回填 | 防止一次 miss 引爆全量扫描 |
 
 `segKey` 示例：
 
@@ -354,9 +432,11 @@ GET /api/logs/{logId}:
 | 不要 | 原因 |
 |------|------|
 | 上报同步强依赖写 ES | 与「查询才写」模型冲突；ES 故障会拖垮上报 |
+| **等近几天全量进 ES 再筛再返回** | 首屏最慢路径；应读时过滤 + 首屏直出 |
+| 把未筛选的完整日志 Bulk 进 ES | 写放大；用户只要条件命中子集 |
 | miss 后逐条同步 index 且无锁 | 惊群写爆 ES |
 | 回填完整 extra 进 ES | 体积与 merge 爆炸；全文在 HDFS |
-| 一次列表 miss 扫光数周 HDFS | 无切桶 = 自造全表扫描 |
+| 一次列表 miss 扫光数周 HDFS | 无切桶 / 无分区裁剪 = 自造全表扫描 |
 
 ### 3.4 读写一体时的集群侧优化
 
@@ -382,7 +462,7 @@ GET /api/logs/{logId}:
 ### 3.6 本节收口
 
 > **ES 写 = 查询 miss 后从 HDFS 回填。**  
-> 列表冷段：按 **时间桶+module 段锁**，流式扫 HDFS → **Bulk 瘦文档** → 温标记 → 再 search。  
+> 列表冷段 **快返**：分区裁剪 → 流式读完整日志 → **读时按条件过滤** → **首屏内存直出**；命中行 **异步 Bulk 瘦文档** 进 ES → 温标记后翻页走 ES。  
 > 详情 miss：HDFS 取全文 → **先返回** → 可选异步写 ES（logId 幂等+锁）。  
 > 读侧（段已热）：瘦查询 + 短缓存 + 查询 singleflight。Nginx 只管限流，合流与回填在应用层。
 
