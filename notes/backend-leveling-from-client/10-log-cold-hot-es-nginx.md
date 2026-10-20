@@ -215,11 +215,58 @@ else:
 | 等整包全进 ES 再返回 | 应用 A0 快返 |
 | 完整 extra 进 ES | 体积爆炸 |
 
+#### D. 「写 ES 的状态」存在哪？
+
+要存的不是业务日志本身（日志在 HDFS / 瘦文档在 ES），而是 **回填控制面状态**：这包灌过没有、谁在灌、灌到哪。
+
+| 状态 | 存哪 | Key 示例 | TTL / 寿命 | 说明 |
+|------|------|----------|------------|------|
+| **latest 指针** | **HDFS**（或上报元数据） | `/logs/{userId}/latest` → uploadId | 随上报更新 | 真相：用户最近一次上报是哪包 |
+| **回填锁** | **Redis** | `backfill:{userId}:{uploadId}` | 短（30～120s）+ 可续期 | 同包只允许一路解析/Bulk |
+| **温标记 warm** | **Redis（主）** | `warm:{userId}:{uploadId}` 或 `warm:{userId}:{uploadId}:all` | 对齐 ES ILM 或略短 | 「此包已灌进 ES」；列表先看它再决定是否拉 HDFS |
+| **分 module 温**（可选） | Redis | `warm:{userId}:{uploadId}:{module}` | 同上 | 若未做「一包侧写全 module」时用 |
+| **回填进度**（可选） | Redis | `backfill:prog:{userId}:{uploadId}` = offset/行号/状态 | 随任务 | 大包断点续灌；小包可省略 |
+| **列表页缓存** | Redis | `list:{listKey}` | 5～30s | 读路径，不是写进度 |
+| **整包短缓存** | 进程内存 / Redis | `blob:{userId}:{uploadId}` | 数十秒 | 降 HDFS 重复读；可只缓存元数据+路径 |
+| **实际已索引内容** | **ES 文档** | `_id=rowKey` | ILM | 真正的数据状态；warm 只是加速判断的缓存 |
+| **回填任务审计**（可选） | MySQL/PG | 任务表 | 长期 | 运维排查；**不**挡请求路径热读 |
+
+推荐默认（够用）：
+
+```text
+HDFS：  latest uploadId（用户最近一次上报）
+Redis： backfill 锁 + warm:{userId}:{uploadId} +（可选）进度
+ES：    瘦文档本身
+```
+
+判定「要不要再写 ES」：
+
+```text
+uploadId = hdfs.latestUploadId(userId)
+
+if redis.get("warm:"+userId+":"+uploadId):
+    → 只读 ES（按列表条件 search）
+else if redis.setNX("backfill:"+userId+":"+uploadId):
+    → 拉包 → Bulk → set warm → del lock
+else:
+    → 等 warm / 共享首屏
+
+若 hdfs.latest 的 uploadId 变了（用户又上报）：
+    旧 warm 自动失效（key 含 uploadId）；对新 uploadId 重新回填
+```
+
+| 不要把状态只放在… | 原因 |
+|-------------------|------|
+| **只靠 ES count 当 warm** | 每次先打 ES；空洞/延迟难区分「未灌」与「条件无数据」 |
+| **只放 Node 进程内存** | 多实例不一致；重启丢锁/丢 warm → 惊群 |
+| **写进 HDFS 日志包内** | 污染真相源；并发更新包危险 |
+| **warm 不带 uploadId** | 用户新上报后仍以为已热，读到旧索引或空窗 |
+
 ### 3.4 收口
 
-> HDFS = **`userId` → 最近一次上报包**。  
-> 列表 = 包内过滤 + ES 瘦索引；换 module **复用同一包**。  
-> 全文 = 再读同包 + 行匹配；**无 logId / fileUri**。
+> HDFS = **`userId` → 最近一次上报包**（含 latest uploadId）。  
+> **写 ES 状态**：锁 / warm / 进度放 **Redis**（key 带 `userId+uploadId`）；数据在 **ES**；latest 在 **HDFS**。  
+> 列表 = 包内过滤 + ES 瘦索引；全文 = 同包行匹配；**无 logId / fileUri**。
 
 ---
 
@@ -359,6 +406,7 @@ A/B/C 同 userId 查 module=network
 | 换 module | 一包解析，侧写多模块瘦文档 |
 | 同 user 惊群 | uploadId 级锁 + 整包短缓存 |
 | 上报更新导致包变 | warm 绑定 uploadId；变则重拉；展开匹配失败则提示重查列表 |
+| **写 ES 状态存哪** | Redis：`backfill` 锁 + `warm:{userId}:{uploadId}`；latest 在 HDFS；文档在 ES |
 | extra 体积 | 不进 ES；仅包内 |
 
 ---
