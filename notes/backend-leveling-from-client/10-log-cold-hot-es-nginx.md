@@ -344,6 +344,75 @@ onHit(row):
 
 若产品强依赖「首屏也必须走 ES」（少见）：至少 **先 Bulk 当前页命中 → `refresh` 该索引 → search 仅这一页条件**，仍不要等整段灌完；但 RT 通常差于「内存直出首屏」。
 
+#### A1. 无 logId 入参 + 切换 module（先 network 再 route）
+
+控制台真实入参通常是：
+
+```text
+userId + from/to + module + 可选筛选（file / line / q / …）
+```
+
+**没有 logId。** logId 只出现在列表每一行的返回里，点详情时才用。
+
+列表 queryKey / 鉴权：
+
+```text
+listKey = hash(userId, from, to, module, file, line, q, cursor)
+// 强制带 userId，防串租户；module 变则 listKey 变（network 与 route 缓存不共用结果页）
+```
+
+##### 两次查询为什么第二次容易又慢
+
+HDFS 按时间分区存的是 **混模块完整日志**。若回填策略是「只 Bulk 当前 module」：
+
+```text
+① 查 network → 扫一遍该时间窗 HDFS → 只写 module=network 的瘦文档 → 首屏快
+② 查 route（同一 from/to）→ ES 仍无 route → 再扫一遍同一批 HDFS → 又慢一次
+```
+
+优化目标：**同一时间窗尽量只付一次（或接近一次）扫盘成本。**
+
+##### 推荐策略（按收益排序）
+
+| 策略 | 做法 | 对 network→route 的效果 |
+|------|------|-------------------------|
+| **① 按时间桶「扫一次、热多模块」** | 锁粒度用 `timeBucket`（小时/天），扫该桶时：**所有 module 的命中行都写成瘦文档**（仍不写完整 extra）；`warm:bucket:{day|hour}` | 第一次查 network 已把同窗 route 写进 ES → **第二次 route 直接 ES，接近热读** |
+| **② 侧写（side-index）** | 仍以当前 module 优先凑首屏；扫描时其它 module 的行 **只进 Bulk 队列、不挡首屏** | network 首屏不慢；route 稍后或下一次变热 |
+| **③ 兄弟模块预热** | network 返回后，异步任务：同 `userId+from/to` 对常用 module（route/pay…）或「该桶内出现过的 module」做后台灌 ES | 用户点开 route 时大概率已 warm |
+| **④ 结果缓存仍按 module 分** | Redis 缓存 `listKey`（含 module）；**不要**把 network 的 page 当成 route 的 page | 防串条件；第二次若 ES 已热则走 3.2 |
+| **⑤ HDFS 布局（长期）** | 若 module 过滤极高频：分区改为 `/logs/{day}/{hour}/{module}/` 或二级目录 | 各 module 扫盘互不重叠，但失去「一次扫热全家」；按数据分布二选一 |
+
+**默认推荐 ① + ②**：时间桶扫盘成本最高，应用层一次流式读摊给多 module 的 ES 瘦索引；当前查询 module 走快通道凑页，其它 module 只侧写。
+
+```text
+backfill(timeBucket, userId):          // 段锁：backfill:bucket:{bucket}:{userId?}
+  for line in hdfs.stream(bucket):
+      if line.userId != userId: continue   // 多租户必做
+      thin = toThinDoc(line)               // 任意 module
+      enqueueBulk(thin)                    // 侧写：network/route/… 都进 ES
+
+      if line.module == requestedModule && match(extraFilters):
+          pushPage(thin)                   // 仅当前查询凑首屏
+
+  markWarm(bucketKey)                      // 该桶对该用户（或全局）已热
+  // 之后：查 route 同 from/to → es.search(module=route) 直接命中
+```
+
+注意：
+
+- **辅筛**（file/line/q）变了：ES 里若已有该桶全 module 瘦文档，**不必再扫 HDFS**，在 ES 上加 filter 即可。  
+- 若当初只按「单 module」warm，辅筛仍可能要回 HDFS——这也是为何更倾向 **时间桶热全 module 瘦文档**。  
+- 写入量：瘦文档 × 桶内行数，仍远小于带完整 extra；比「每个 module 各扫一遍 HDFS」更划算。
+
+##### 无 logId 时「定位某条」怎么走
+
+```text
+列表（userId+时间+module+筛选）→ 返回行里带 logId
+  → 用户点行 → 才用 logId 读 HDFS 全文
+```
+
+没有 logId 入参时，不存在「直接点查一条」；只能 **先列表缩小，再点选**。100 万行也是同一模型：时间裁剪 → module → 辅筛 → 分页。
+
 #### A. 列表段级回填（同一段最容易惊群）
 
 多人同时打开同一时间窗 + 同一 module，且 ES 还是冷的。默认走 **A0 快返**；下面是合流与灌完后的完整控制面：
