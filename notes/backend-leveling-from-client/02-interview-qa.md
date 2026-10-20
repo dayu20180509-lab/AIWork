@@ -401,10 +401,106 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 适合 IO 密集（等 HDFS / ES / Redis）。风险：单线程 event loop，JSON 解析大包、同步压缩会堵全进程；多实例下内存 Map 锁不够。  
 对策：流式解析、Worker 卸 CPU、超时、连接池、Redis 分布式锁。
 
-#### N2. 同一 userId 多人同时查冷数据，Node 怎么防惊群？
+#### N2. 同一 userId 多人同时查冷数据，Node 怎么防惊群？（含实现）
 
-**参考答**：  
+**参考答（口述）**：  
 进程内 `Map` singleflight（同 `userId+uploadId` 共用 Promise）+ Redis `SET NX` 回填锁；首屏可共享；Bulk 异步。只靠进程内 Map 在多 Pod 下无效。
+
+**实现要点（两层合流）**：
+
+```text
+层1 进程内：inflight Map —— 同 key 的 await 都挂在同一个 Promise 上
+层2 跨进程：Redis SET key NX EX —— 只有一个 Pod 真去拉 HDFS/Bulk
+```
+
+```js
+// --- singleflight：多人共用一次执行结果 ---
+const inflight = new Map();
+
+function singleflight(key, fn) {
+  const hit = inflight.get(key);
+  if (hit) return hit;                 // B、C 直接拿 A 的 Promise
+
+  const p = (async () => {
+    try {
+      return await fn();               // 只有第一个进来的跑 fn
+    } finally {
+      inflight.delete(key);            // 必须删，否则泄漏 / 永远复用旧 Promise
+    }
+  })();
+
+  inflight.set(key, p);
+  return p;
+}
+
+// --- 冷回填：同 userId+uploadId 只拉包一次 ---
+async function ensureBackfill(userId, uploadId, doWork) {
+  const key = `bf:${userId}:${uploadId}`;
+
+  return singleflight(key, async () => {
+    // 跨 Pod：只有一个实例拿到锁
+    const locked = await redis.set(`backfill:${userId}:${uploadId}`, '1', 'EX', 120, 'NX');
+    if (!locked) {
+      // 别人在灌：轮询 warm，或短等后再读 ES / 共享方结果
+      await waitUntil(() => redis.get(`warm:${userId}:${uploadId}`), { timeoutMs: 3000 });
+      return { shared: true };
+    }
+    try {
+      const page = await doWork();     // getLatestUpload → 过滤 → 首屏 + 异步 Bulk
+      await redis.set(`warm:${userId}:${uploadId}`, '1', 'EX', 86400);
+      return { page, shared: false };
+    } finally {
+      await redis.del(`backfill:${userId}:${uploadId}`);
+    }
+  });
+}
+```
+
+并发回数据怎么走（冷）：
+
+```text
+T0  A、B、C 同时 miss（同 userId，同 uploadId）
+T1  A 创建 Promise，放进 inflight；B、C get 到同一个 Promise
+T2  A 的 fn：Redis SET NX 成功 → 拉 HDFS → 凑满 page
+T3  A resolve({ page })  → B、C 的 await 一起拿到同一份 page（或自行再 es.search）
+T4  Bulk 可继续异步；warm 点亮后后续请求走 ES
+```
+
+**相同 listKey 只打一次 ES search，多人怎么拿数据**（热路径，同一套路）：
+
+```js
+async function searchOnce(listKey, runSearch) {
+  // 1) 短缓存：已有结果直接返回
+  const cached = await redis.get(`list:${listKey}`);
+  if (cached) return JSON.parse(cached);
+
+  // 2) singleflight：并发只 search 一次
+  return singleflight(`es:${listKey}`, async () => {
+    // 双检，避免等锁期间别人已写入缓存
+    const again = await redis.get(`list:${listKey}`);
+    if (again) return JSON.parse(again);
+
+    const result = await runSearch();          // 真正的 es.search
+    await redis.setex(`list:${listKey}`, 15, JSON.stringify(result));
+    return result;                             // 所有 await 方拿到同一 result
+  });
+}
+
+// 三个并发请求：
+// const r1 = searchOnce(key, () => es.search(...))
+// const r2 = searchOnce(key, () => es.search(...))
+// const r3 = searchOnce(key, () => es.search(...))
+// → 只调用 1 次 es.search；r1/r2/r3 都 resolve 为同一对象（或同等 JSON）
+```
+
+要点：
+
+| 点 | 说明 |
+|----|------|
+| **回传机制** | 不是「推送」，是多个 HTTP handler `await` 同一个 Promise，`resolve` 后各自 `res.json` |
+| **listKey** | 必须含 userId、from、to、module、辅筛、cursor，防串条件/串租户 |
+| **多 Pod** | 仅 Map 时每 Pod 仍可能各打一次 ES → 再加 Redis 锁或依赖短缓存「第二个 Pod 读到 cache」 |
+| **权限** | 缓存与 flight key 都要带 userId |
 
 #### N3. Bulk 瘦文档是什么？为什么不把完整 extra 进 ES？
 
