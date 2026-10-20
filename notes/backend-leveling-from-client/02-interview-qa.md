@@ -379,16 +379,16 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 网关鉴权与限流；批量写入；Kafka 缓冲；乱序与重复；采样；隐私脱敏；回压策略。  
 （客户端出身可强调端上批量与服务端契约。）
 
-### I4. 日志查询：时间+功能模块索引是否够用 / 分页与详情（Node.js）
+### I4. 日志查询：时间+功能模块索引是否够用 / 列表与全文（Node.js）
 
 **要点**：  
 - 列：`eventTime`、`module`（**高重复**）、`file`/`line`、`extra`（**几乎不重复**）  
-- **判断**：时间+模块做列表主索引 **够用**（须强制时间窗 + search_after）；module 不能单独查；extra **不要**当主索引，全文进 **HDFS**  
-- **ES 写入方向**：上报只写 HDFS；**查询 miss → 从 HDFS 回填 ES**（列表段级 Bulk / 详情点级）  
-- 列表：filter + search_after；冷段用 **segKey 锁** 流式扫 HDFS→Bulk 瘦文档→温标记  
-- 详情：ES miss → 读 HDFS **先返回**，ES 可异步写（logId 幂等+锁）  
-- **同一段并发读**：短缓存 + 查询 singleflight  
-- 见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) §1 / §3.3 / §5  
+- **列表 query**：**userId + from/to + module + 可选筛选**；**没有 logId**  
+- **判断**：时间+模块做列表主索引 **够用**（须强制时间窗 + search_after）；extra **不要**当主索引  
+- **ES 写入**：上报只写 HDFS；**仅列表 miss → HDFS 扫窗 → Bulk 瘦文档**（无按 id 点级回填）  
+- **全文**：**fileUri → HDFS**；**不做 logId 详情回溯，展开全文不写 ES**  
+- 冷段快返：读时过滤 + 首屏直出；换 module：时间桶一次扫、侧写多模块  
+- 见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) §1 / §3 / §5  
 
 完整方案见该文档。
 
