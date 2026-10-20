@@ -1028,7 +1028,7 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 | 只选 module 不选时间 | **不够**；产品强制时间范围（module 高重复） |
 | 条件用 match 扫全体 | module/file 用 term；关键字只打 preview |
 | **同一段日志并发读** | queryKey 短缓存 + 查询 singleflight；瘦 filter；缩日索引 |
-| **ES 写入（查询触发）** | miss → HDFS；**段锁 + 流式 Bulk 瘦文档 + 温标记 + 回填限速** |
+| **ES 写入（查询触发）** | miss → HDFS；**分区裁剪 + 读时过滤 + 首屏直出 + 异步 Bulk 瘦文档 + 段锁/温标记** |
 | 详情 miss 打穿 HDFS/ES | logId 锁 + `_id` 幂等；**先返回 HDFS，ES 可异步写** |
 | 多用户总流量过大 | Nginx 限流；列表接口更严 |
 | 单 logId 被刷 | Nginx 按 `$request_uri` 限流 |
@@ -1047,7 +1047,7 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 
 > **时间+模块做主索引够不够？** module 高重复 → 必须带时间窗 + 分页；extra 不重复 → 不做列表主索引。  
 > **ES 怎么来的？** 查询 miss → 从 **HDFS 回填**（段级 Bulk / 点级幂等）；上报只保证 HDFS。  
-> **同一段并发**：读用缓存+查询 singleflight；写用 **段锁+HDFS 流式 Bulk+瘦文档+限速**；详情先回 HDFS。Nginx 限流，合流在应用层。
+> **同一段并发**：读用缓存+查询 singleflight；冷段快返用 **读时过滤+首屏直出+异步 Bulk**；写用 **段锁+瘦文档+限速**；详情先回 HDFS。Nginx 限流，合流在应用层。
 
 ---
 
