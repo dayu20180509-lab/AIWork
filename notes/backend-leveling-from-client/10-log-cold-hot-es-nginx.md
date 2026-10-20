@@ -1,9 +1,10 @@
-# 日志冷热架构：大文件 + ES 查询 + Nginx 限流
+# 日志冷热架构：HDFS 真相源 + 查询回填 ES + Nginx 限流
 
 > **日志列**：发生时间、功能模块、代码文件:行号、附加内容。  
-> **ES 主索引维度**：**发生时间 + 功能模块**（列表按此筛）；时间长则分页。  
-> **详情**：用 **logId** 取全文（ES → miss 回源大文件并回填）。  
-> 后台 **Node.js**。本文含字段模型、查询链路、筛选分页、回填、Nginx、Node 难点。
+> **真相源**：**HDFS（或等价大文件存储）** — 上报只保证写入 HDFS。  
+> **ES**：**按需热索引** — 用户查询时若 ES 没有，再从 HDFS 解析并写入 ES，之后列表/点查走 ES。  
+> **ES 主索引维度**：**发生时间 + 功能模块**；时间长则分页。  
+> 后台 **Node.js**。本文含字段模型、查询链路、筛选分页、**查询触发回填**、Nginx、Node 难点。
 
 ---
 
@@ -11,24 +12,28 @@
 
 | 层 | 角色 |
 |----|------|
-| 大文件系统 | **原文真相源**（含完整附加内容）；按 **logId** 读 |
-| Elasticsearch | **检索主入口**：按 **eventTime + module** 过滤分页；可带 file/line 摘要；ILM 过期 |
-| API 服务 | **列表 = ES search**；**详情 = ES get，miss 回源文件** |
-| Nginx | TLS、路由、列表/详情限流 |
+| **HDFS / 大文件** | **唯一真相源**（含完整 extra）；按时间分区与 logId 可读；上报必达 |
+| Elasticsearch | **查询加速层**：按 **eventTime + module** 过滤分页；**缺则查询路径从 HDFS 回填**；ILM 可丢 |
+| API 服务 | 列表/详情先查 ES；**miss → 读 HDFS → 写 ES（瘦文档）→ 再查或直接返回** |
+| Nginx | TLS、路由、列表/详情限流（抑回填风暴入口） |
 
 ```text
+上报（写路径主）：只写 HDFS（按日/小时分区 + logId）
+                    ES 不保证同步写满（可完全不写，靠查询回填）
+
 前端控制台
     → Nginx
     → Log Query API（Node.js）
          │
-         │ ① 主路径：时间 + 功能模块（+ 可选条件）列表
-         ├─ GET /api/logs?from&to&module=checkout&file&line&q&cursor=
-         │     → ES：filter(eventTime, module, …) + search_after
-         │     → 返回：logId, eventTime, module, file, line, extraPreview…
+         │ ① 列表：时间 + 功能模块（+ 可选）
+         ├─ GET /api/logs?from&to&module=checkout&…
+         │     → ES 有该段？→ search_after 返回
+         │     → ES 没有 / 明显空洞？→ 从 HDFS 拉该段 → Bulk 写 ES → 再 search
          │
          │ ② 详情：点开一行
          └─ GET /api/logs/{logId}
-               → ES.get → miss 则大文件回源并回填
+               → ES.get 命中 → 返回（preview / 元数据）
+               → miss → HDFS.get(logId) →（可选）写瘦文档进 ES → 返回全文
 ```
 
 ### 1.1 字段模型（列定义）
@@ -129,19 +134,28 @@
 
 ## 2. 整体日志查询链路（端到端）
 
-### 2.1 写入（查询的前提）
+### 2.1 写入分层：HDFS 必达，ES 按需
 
 ```text
-上报
+① 上报（同步承诺只到 HDFS）
   → 接入（鉴权、限流、batch 幂等）
-  → 大文件：存完整记录（含 extra 全文），key=logId
-  → ES 文档（索引热字段）：
+  → HDFS：完整记录（含 extra 全文）
+       路径建议：/logs/{yyyy}/{MM}/{dd}/{HH}/… 或按 userId 再分区
+       行内可解析出：eventTime, module, file, line, extra, logId, userId
+
+② ES 写入（本架构主方向 = 查询触发）
+  → 用户列表/详情 miss
+  → 从 HDFS 读该段或该 logId
+  → 解析出热字段，Bulk/单条写入 ES（瘦文档）：
        eventTime, module,          ← 主索引维度
        file, line,                 ← 定位代码
-       extraPreview, logId, userId, fileUri
+       extraPreview, logId, userId, fileUri（HDFS 路径）
 ```
 
-mapping 要点：
+> **定论**：HDFS 丢了不可恢复；ES 丢了（ILM/宕机）只要 HDFS 在，下次查询再回填即可。  
+> 可选增强：上报后异步预热热时段进 ES——**不是本架构必选项**，优化重点仍在「查询 miss → HDFS → ES」。
+
+mapping 要点（回填时按此写）：
 
 ```json
 {
@@ -182,26 +196,29 @@ GET /api/logs/{logId}
   → 要全文 / miss → 文件服务（fileUri 或 logId）→ 可回填 ES 摘要
 ```
 
-同一段日志的并发读写优化见第 3 节。
+同一段日志的并发读写与 **HDFS→ES 回填** 优化见第 3 节。
 
 ---
 
-## 3. 并发：多请求同时查「同一段日志」时，ES 读写怎么优化
+## 3. 并发：同一段查询时，ES 读 +「HDFS→ES 写」怎么优化
 
-「同一段」指：相同或高度重叠的查询条件，例如同一 `from/to` + 同一 `module=network`（再加相同翻页附近）。多用户、多标签页会同时打到 ES **读**，并可能触发批量 **写**（上报索引 / miss 回填）。
+「同一段」指：相同或高度重叠的查询条件，例如同一 `from/to` + 同一 `module=network`（再加相同翻页附近）。
+
+本架构下 **ES 的写几乎都来自查询**：miss 后从 **HDFS 读出 → 解析 → 写入 ES**。多用户同时查冷段时，会同时触发 **读 ES** 与 **回填写 ES**。
 
 ### 3.1 会出什么问题
 
 | 方向 | 现象 |
 |------|------|
-| **读放大** | 同一查询条件被重复执行 N 次，ES 查询线程、缓存、磁盘 IO 打满 |
-| **写放大** | 上报高峰 Bulk 过大；或多人详情 miss 同时回填，集中写同一热索引 |
-| **读写互相踩** | 刷新/合并（merge）高峰时查询变慢；查询过重拖慢写入队列 |
-| **连接与 Node** | 无连接池上限、无并发闸，把 ES 或自身 event loop 拖死 |
+| **读放大** | 同一条件重复 search；冷段未回填时反复空查 |
+| **回填惊群** | N 个请求发现同一段 miss，N 路同时扫 HDFS、N 路 Bulk 写同一热索引 |
+| **HDFS 打穿** | 列表 miss 扫分区 + 详情 miss 点读，文件集群带宽/NameNode 压力暴涨 |
+| **读写互相踩** | 回填 Bulk/refresh/merge 高峰拖慢正在进行的列表 search |
+| **连接与 Node** | 无回填并发闸、无连接池上限，打爆 HDFS、ES 与 event loop |
 
 ### 3.2 读路径优化（同一段列表查询）
 
-目标：同样条件的并发读，尽量 **少打 ES、打也要轻**。
+目标：同样条件的并发读，尽量 **少打 ES、打也要轻**（段已回填之后）。
 
 | 优化 | 做法 |
 |------|------|
@@ -210,7 +227,7 @@ GET /api/logs/{logId}
 | **短结果缓存** | 对「条件哈希 + cursor」缓存列表页 5～30s（Redis）；同一段多人共享一页结果 |
 | **Singleflight（查询级）** | 进程内：相同 `queryKey` 共用一个进行中的 Promise；多实例可用 Redis 锁「只放行 1 个打 ES，其它读缓存」 |
 | **filter 缓存友好** | 条件稳定、走 filter context，利于 ES 内部缓存 |
-| **限流与隔离** | Nginx/应用对列表接口单独限流；必要时独立「查询」集群与「写入」集群 |
+| **限流与隔离** | Nginx/应用对列表接口单独限流；回填写与查询可分节点 |
 | **分页要浅要稳** | search_after；大跨度切窗，避免一次扫很长一段 |
 
 `queryKey` 示例：
@@ -219,7 +236,7 @@ GET /api/logs/{logId}
 hash(from, to, module, file, line, userId, q, cursor)
 ```
 
-示意：
+示意（**段已在 ES 时**）：
 
 ```text
 list(queryKey):
@@ -231,68 +248,143 @@ list(queryKey):
       return hits
 ```
 
-注意：有权限隔离时，cache key **必须带 userId/角色**，防串数据。
+注意：有权限隔离时，cache key **必须带 userId/角色**，防串数据。  
+若判定「段未热」→ 先走 **3.3 段级回填**，再执行上述 search。
 
-### 3.3 写路径优化（同一段相关的写入）
+### 3.3 写路径优化（查询 miss：HDFS → ES）
 
-写入来源通常两类：**管道异步索引**（主）、**详情 miss 回填**（辅）。
+**定论：ES 写入的主方向 = 用户查询发现没有 → 从 HDFS 取数写入。**  
+不是上报同步双写；上报只保证 HDFS。
 
-#### A. 管道写入（上报 → ES）
+两类触发：
 
-| 优化 | 做法 |
-|------|------|
-| **Bulk 批量** | 聚合几百～几千条一刷，忌逐条 index |
-| **刷新间隔** | 提高 `refresh_interval`（如 5s～30s）换写入吞吐；列表近实时可接受秒级延迟 |
-| **副本与路由** | 写入高峰可临时调副本策略（按运维规范）；`routing=module` 或 `userId` 需与查询一致 |
-| **背压** | MQ 消费者限速；ES 429/`es_rejected_execution` 时退避，勿无脑重试打爆 |
-| **写入与查询分离** | 热查询走专用节点/集群；ingest 打写入节点 |
-| **文档要瘦** | 不写完整 extra；只写主维 + preview，降低同一段热索引的写放大 |
-
-#### B. 详情回填写入（多人点开同一段里的多条 / 同一 logId）
-
-| 优化 | 做法 |
-|------|------|
-| **按 logId 幂等** | `_id=logId`；`create` 或覆盖写，重复回填无害 |
-| **Singleflight / 锁** | 同 logId 只回源一次；同「段」可限制全局 backfill 并发（p-limit） |
-| **能不回填就不回填** | 列表已有摘要则详情可只读文件不写 ES；或异步队列回填，不挡响应 |
-| **回填限速** | 整段 miss 风暴时：令牌桶限制 ES index QPS |
-
-同 logId 回填流程：
+| 触发 | 何时 | 从 HDFS 取什么 | 写入 ES |
+|------|------|----------------|---------|
+| **A. 段级回填** | 列表查询：该 `from/to`+`module` 在 ES 几乎无命中 / 标记未热 | 该时间分区内匹配 module 的一批行 | **Bulk** 瘦文档 |
+| **B. 点级回填** | 详情：`ES.get(logId)` miss | 单条 `logId` 全文 | 单条或并入小 Bulk；`_id=logId` |
 
 ```text
-miss 后：
-  if tryLock("backfill:"+logId):
-      body = file.get(logId)
-      es.index(_id=logId, doc=瘦文档)  // 失败仍可返回文件内容
-      unlock
-  else:
-      等待/轮询 ES 或只读文件不写 ES
+查询
+  → ES 命中？→ 只读，不写
+  → miss？→ 读 HDFS → 解析热字段 → 写 ES →（再 search / 或直接返回）
 ```
+
+#### A. 列表段级回填（同一段最容易惊群）
+
+多人同时打开同一时间窗 + 同一 module，且 ES 还是冷的：
+
+```text
+list(from, to, module):
+  if segmentWarm(from,to,module) or es.hasEnoughHits(...):
+      return es.search(...)           // 走 3.2
+
+  // 冷段：只允许一路从 HDFS 灌 ES
+  if tryLock("backfill:seg:"+segKey):   // segKey=hash(from,to,module) 或按小时桶
+      rows = hdfs.scan(partition=时间分区, filter=module)  // 流式读，勿一次载入内存
+      for chunk in rows.batches(500~2000):
+          es.bulk(index=日索引, docs=toThinDocs(chunk))   // _id=logId，幂等
+      markWarm(segKey, ttl=与 ILM 对齐或略短)
+      unlock
+      return es.search(...)           // refresh 后可 search；或 bulk 后主动 refresh 该索引
+  else:
+      await warm or 轮询短等待 → es.search(...)
+      // 超时：可降级「直接流式扫 HDFS 返回本页」，并异步继续回填（见下）
+```
+
+| 优化 | 做法 | 为什么 |
+|------|------|--------|
+| **段锁 / Singleflight** | 同一 `segKey` 全局只跑 1 个 HDFS→ES 任务 | 避免 N 路重复扫盘、重复 Bulk |
+| **按时间桶切段** | 不要一次回填「7 天×全 module」；按 **小时/天桶** + 当前 module 灌 | 控制单次 HDFS 扫描与 Bulk 体积 |
+| **流式 + 小 Bulk** | HDFS 流式读 → 500～2000 条一刷 ES | 控 Node 内存；比逐条 index 快一个数量级 |
+| **瘦文档** | 只写 eventTime/module/file/line/extraPreview/logId/fileUri；**完整 extra 留 HDFS** | 回填写放大小，列表够用 |
+| **幂等 `_id=logId`** | `create` 或 index 覆盖 | 两路回填重叠、重试均安全 |
+| **回填与查询节奏** | Bulk 期间可调高该索引 `refresh_interval`；段灌完再 `refresh` 一次供列表 | 减少 merge 抖动 |
+| **背压** | ES 429 / HDFS 慢 → 暂停 Bulk、延长锁持有方退避；全局 **回填并发上限**（同时只热 N 个 seg） | 保护双集群 |
+| **温标记** | Redis：`warm:{segKey}`；或 ES 侧「探测 count>阈值」 | 第二次列表不再扫 HDFS |
+| **降级** | 回填太慢：本请求直接从 HDFS 拼一页返回，ES 回填改异步队列 | 用户不被长回填卡住 |
+| **切窗强迫** | 产品限制最大查询跨度；跨度大先切窗再逐窗回填 | 防止一次 miss 引爆全量 HDFS 扫描 |
+
+`segKey` 示例：
+
+```text
+segKey = hash(dayOrHourBucket, module [, userId])
+// 列表 from/to 跨多桶时：按桶拆分回填，不要合成一个巨大 segKey
+```
+
+#### B. 详情点级回填（logId miss）
+
+```text
+GET /api/logs/{logId}:
+  doc = es.get(logId)
+  if doc: return doc (+ 若要全文且只有 preview → 仍可读 HDFS，不必再写 ES)
+
+  // miss：从 HDFS 取真相
+  if tryLock("backfill:id:"+logId):
+      body = hdfs.get(logId)          // 失败 → 404/502，勿写 ES
+      thin = toThinDoc(body)
+      // 推荐：先返回全文给用户，ES 写入异步（不挡 RT）
+      enqueue or es.index(_id=logId, thin)
+      unlock
+      return body
+  else:
+      // 别人正在回填：可读 HDFS 直接返回，或短等 ES
+      return hdfs.get(logId)
+```
+
+| 优化 | 做法 |
+|------|------|
+| **logId 锁** | 同 id 只回源写一次 |
+| **先响应用户，再写 ES** | 详情 RT 绑 HDFS；ES 失败不影响返回 |
+| **能不写就不写** | 列表已有摘要且用户只要全文 → **只读 HDFS，不写 ES**（除非希望下次点查走 ES） |
+| **点级限速** | 令牌桶限制「HDFS→ES index」QPS，避免整页连点打穿 |
+| **与段回填去重** | 段 Bulk 已写入的 logId，详情不应再写；`create` 遇冲突即停 |
+
+#### C. 回填写 ES 的集群侧要点（专指 HDFS→ES）
+
+| 项 | 建议 |
+|----|------|
+| Bulk 大小 | 按文档瘦度调；盯 `indexing` 队列与 429 |
+| refresh | 回填中稀疏 refresh；段完成或首屏需要时再 refresh |
+| 日索引 | 写入目标 = 该行 `eventTime` 对应日索引，勿写错天 |
+| 与读隔离 | 条件允许时：回填 Bulk 打写入节点；用户 search 打查询节点 |
+| 观测 | `backfill_seg_QPS`、`backfill_id_QPS`、HDFS 读延迟、ES Bulk 拒绝率、`warm` 命中率、回填锁等待时长 |
+
+#### D. 明确不做什么
+
+| 不要 | 原因 |
+|------|------|
+| 上报同步强依赖写 ES | 与「查询才写」模型冲突；ES 故障会拖垮上报 |
+| miss 后逐条同步 index 且无锁 | 惊群写爆 ES |
+| 回填完整 extra 进 ES | 体积与 merge 爆炸；全文在 HDFS |
+| 一次列表 miss 扫光数周 HDFS | 无切桶 = 自造全表扫描 |
 
 ### 3.4 读写一体时的集群侧优化
 
 | 项 | 建议 |
 |----|------|
-| 热索引 | 同一时段+热模块写入集中，注意分片数别过碎或过粗 |
-| 副本 | 读多写少可适当加副本分担读；写入瓶颈时评估 |
-| 熔断 | 查询慢或拒绝时，应用快速失败/降级，避免重试风暴 |
-| 观测 | 分段监控：查询 QPS/P99、Bulk 拒绝率、refresh/merge、同一 queryKey 命中率 |
+| 热索引 | 同一时段+热模块被回填时写入集中，分片数别过碎或过粗 |
+| 副本 | 读多（段已热）可适当加副本；回填高峰评估写压力 |
+| 熔断 | HDFS/ES 慢或拒绝 → 快速失败/降级扫 HDFS 一页，避免重试风暴 |
+| 观测 | 查询 QPS/P99、回填 Bulk 拒绝率、refresh/merge、queryKey 与 warm 命中率 |
 
 ### 3.5 Nginx 在「同一段」并发里做什么
 
-标准 Nginx **不能**把「相同列表条件」自动合并成一次 ES 查询。
+标准 Nginx **不能**合并「相同列表条件」，也 **不能**替你做 HDFS→ES 回填合流。
 
-| 诉求 | Nginx | 应用 / ES |
-|------|-------|-----------|
-| 多用户打同一段列表 | 按 IP/用户/`$request_uri` 限流 | queryKey 缓存 + 查询 singleflight |
-| 同一 logId 详情毛刺 | URI 限流、可选短 proxy_cache | logId 锁 + 幂等写 |
-| 保护 ES | 总入口限流、超时 | Bulk 背压、读写隔离 |
+| 诉求 | Nginx | 应用 |
+|------|-------|------|
+| 多用户打同一冷段列表 | 按 IP/用户限流，压入口 | **segKey 锁 + Bulk 回填** + queryKey 缓存 |
+| 同一 logId 详情毛刺 | URI 限流、可选短 proxy_cache | **logId 锁** + 幂等写 + 可只读 HDFS |
+| 保护 HDFS/ES | 总入口限流、超时 | 回填并发上限、Bulk 背压 |
 
 详见第 7 节。
 
 ### 3.6 本节收口
 
-> **同一段日志**高并发时：读侧用 **瘦查询 + 日索引裁剪 + 短缓存 + 查询级 singleflight**；写侧用 **Bulk、refresh 调优、瘦文档、背压**；详情回填用 **logId 幂等 + 锁 + 限速**。Nginx 只管流量毛刺，合并请求在应用层做。
+> **ES 写 = 查询 miss 后从 HDFS 回填。**  
+> 列表冷段：按 **时间桶+module 段锁**，流式扫 HDFS → **Bulk 瘦文档** → 温标记 → 再 search。  
+> 详情 miss：HDFS 取全文 → **先返回** → 可选异步写 ES（logId 幂等+锁）。  
+> 读侧（段已热）：瘦查询 + 短缓存 + 查询 singleflight。Nginx 只管限流，合流与回填在应用层。
 
 ---
 
@@ -447,14 +539,15 @@ cursor = { filtersHash, window(start,end), searchAfter }
 | total | 用 nextCursor/hasMore，慎用精确 deep hit count |
 | 限流 | 列表严于详情 |
 
-### 5.9 与冷存
+### 5.9 与冷存（HDFS）
 
 | 步骤 | 存哪 |
 |------|------|
-| 时间+模块列表 | ES |
-| file/line/preview | ES |
-| 完整附加内容 extra | **大文件** |
-| 详情 | logId → ES / 文件 |
+| 上报落盘（必达） | **HDFS** |
+| 时间+模块列表 | **ES**（无则查询时从 HDFS 段级回填） |
+| file/line/preview | ES（回填时写入） |
+| 完整附加内容 extra | **HDFS** |
+| 详情 | logId → ES miss 则 **HDFS**（可再异步写 ES） |
 
 ### 5.10 Node.js 列表示意
 
@@ -550,8 +643,8 @@ logs-2026.10.19   ← 回填写入当前热索引（别名 logs-hot）
 超过 N 天 → ILM delete 整索引
 ```
 
-再点查 miss → 再回源回填，形成闭环。  
-列表可查范围也应与 ILM 保留天数对齐（或产品提示「仅支持近 N 天」）。
+ILM 删掉热索引后：再查同一段 → 再次 **HDFS→ES 回填**，形成闭环。  
+列表可查范围可大于 ES 保留天数（更老的靠回填），或产品提示「近 N 天已预热更快」。
 
 ### 6.2 N 怎么选
 
@@ -849,14 +942,14 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 
 | 难点 | 对策 |
 |------|------|
-| 列表筛不出某模块 | 上报必须写准 `module`/`eventTime` 进 ES |
+| 列表筛不出某模块 | HDFS 行内必须能解析准 `module`/`eventTime`；回填写入 ES 时带上 |
 | **时间+模块分页** | filter；**search_after(eventTime,logId)**；改条件重置 cursor；切窗 |
-| extra 撑爆索引 | 全文进文件，ES 只 `extraPreview`（extra 越不重复越不该主索引） |
+| extra 撑爆索引 | 全文留 HDFS，ES 只 `extraPreview`（extra 越不重复越不该主索引） |
 | 只选 module 不选时间 | **不够**；产品强制时间范围（module 高重复） |
 | 条件用 match 扫全体 | module/file 用 term；关键字只打 preview |
 | **同一段日志并发读** | queryKey 短缓存 + 查询 singleflight；瘦 filter；缩日索引 |
-| **同一段相关并发写** | Bulk + refresh 调优 + 瘦文档 + MQ 背压；回填限速 |
-| 详情 miss 打穿文件/ES | logId 锁 + `_id` 幂等；可异步回填 |
+| **ES 写入（查询触发）** | miss → HDFS；**段锁 + 流式 Bulk 瘦文档 + 温标记 + 回填限速** |
+| 详情 miss 打穿 HDFS/ES | logId 锁 + `_id` 幂等；**先返回 HDFS，ES 可异步写** |
 | 多用户总流量过大 | Nginx 限流；列表接口更严 |
 | 单 logId 被刷 | Nginx 按 `$request_uri` 限流 |
 | ES 点查慢 | Get by id；列表控 `_source`、按天缩索引 |
@@ -873,7 +966,8 @@ ES 客户端注意：默认重试可能在故障时**放大流量**；对点查�
 ## 11. 面试收口
 
 > **时间+模块做主索引够不够？** module 高重复 → 必须带时间窗 + 分页；extra 不重复 → 不做列表主索引。  
-> **同一段并发**：读用缓存+查询 singleflight；写用 Bulk/背压/瘦文档；详情回填 logId 幂等+锁。Nginx 限流，合并在应用层。
+> **ES 怎么来的？** 查询 miss → 从 **HDFS 回填**（段级 Bulk / 点级幂等）；上报只保证 HDFS。  
+> **同一段并发**：读用缓存+查询 singleflight；写用 **段锁+HDFS 流式 Bulk+瘦文档+限速**；详情先回 HDFS。Nginx 限流，合流在应用层。
 
 ---
 
