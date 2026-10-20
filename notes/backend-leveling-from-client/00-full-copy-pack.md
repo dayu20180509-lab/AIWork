@@ -1,33 +1,37 @@
 # 客户端转后端：练级 + 详解 + 面试题（完整可复制版）
 
-> 由 `01-leveling-guide.md` 及其文内链接文档展开合并，便于一次性复制/导出。  
-> 生成方式：主攻略 → L0～L5 详解 → 面试题。原拆分文件仍可单独阅读。  
-> 参考专栏：《左耳听风》（正版：https://time.geekbang.org/column/intro/100002201）
+> 由 `01-leveling-guide.md` 及全部专题文档展开合并，便于一次性复制/导出。
+> 含：主攻略、L0 HTTP/Node 面试详解、最小栈、L1～L5、日志冷热、面试题（含 I5 Node）。
+> 原拆分文件仍可单独阅读。参考专栏：《左耳听风》https://time.geekbang.org/column/intro/100002201
 
 ---
 
 # 目录
 
 1. [练级主攻略（01）](#part-01)
-2. [L0 最小后端栈（03）](#part-03)
-3. [L1 入门与修养（04）](#part-04)
-4. [L1 关系数据库基础（05）](#part-05)
-5. [L2 专业基础（06）](#part-06)
-6. [L3 软件设计与范式（07）](#part-07)
-7. [L4 分布式弹力与性能（08）](#part-08)
-8. [L5 架构进阶与高手成长（09）](#part-09)
-9. [面试题与参考答案（02）](#part-02)
+2. [L0 HTTP 服务端视角 + Node 落地（11）](#part-11)
+3. [L0 Node.js 面试向详解（12）](#part-12)
+4. [L0 最小后端栈（03）](#part-03)
+5. [L1 入门与修养（04）](#part-04)
+6. [L1 关系数据库基础（05）](#part-05)
+7. [L2 专业基础（06）](#part-06)
+8. [L3 软件设计与范式（07）](#part-07)
+9. [L4 分布式弹力与性能（08）](#part-08)
+10. [L5 架构进阶与高手成长（09）](#part-09)
+11. [日志冷热 HDFS + ES + Nginx（10）](#part-10)
+12. [面试题与参考答案（02）](#part-02)
 
 ---
 
 <a id="part-01"></a>
 
-# ========== PART 01：练级主攻略 ==========
+# ========== PART 01：练级主攻略（01） ==========
 
 # 客户端背景：后端开发练级攻略
 
 > 结构对齐《左耳听风》「程序员练级攻略」五篇（入门 / 修养 / 专业基础 / 软件设计 / 高手成长），并嵌入「分布式」「弹力设计」「性能设计」「管理设计」等后端核心模块。  
-> 目标读者：**有客户端工程经验，要系统转向后端 / 全栈 / 服务端架构**。
+> 目标读者：**有客户端工程经验，要系统转向后端 / 全栈 / 服务端架构**。  
+> 需要一次性复制全文时，见展开合集：[00-full-copy-pack.md](./00-full-copy-pack.md)（含本文 + 文内全部链接详解 + 面试题）。
 
 ---
 
@@ -106,18 +110,19 @@
 
 ### 必学
 
-1. **HTTP 再学一遍（服务端视角）**  
+1. **HTTP 再学一遍（服务端视角）**（详解 + Node 落地见 [11-http-server-nodejs.md](./11-http-server-nodejs.md)）  
    - 方法语义：GET 安全幂等；PUT/DELETE 幂等；POST 不幂等（需设计幂等键）  
    - 状态码分层：2xx 成功 / 4xx 客户端错 / 5xx 服务端错  
    - Header：`Authorization`、`Idempotency-Key`、`ETag`/`If-None-Match`、分页与限流头  
-   - 客户端经验映射：你写的重试逻辑，后端必须配合幂等与正确状态码
+   - 客户端经验映射：你写的重试逻辑，后端必须配合幂等与正确状态码  
+   - Node：Method 路由、鉴权/幂等中间件、统一错误、`Retry-After`、与日志项目 GET 回填的关系
 
 2. **选一门后端主语言（建议三选一）**  
    - **Go**：部署简单、并发模型清晰，适合服务端入门（专栏对 Go/Docker 有专门讨论）  
    - **Java / Kotlin**：生态全（Spring），面试与大厂后端岗位覆盖广  
-   - **Node / TypeScript**：若你来自 RN/前端，迁移成本最低，但要补强类型与并发边界  
+   - **Node / TypeScript**：若你来自 RN/前端，迁移成本最低，但要补强类型与并发边界（**面试向详解**：[12-l0-nodejs-interview.md](./12-l0-nodejs-interview.md)）  
 
-   《练级攻略》偏 Java 作为工业级主语言；**客户端转后端可优先 Go 或 Kotlin**，降低心智切换成本，同时保持服务端就业面。
+   《练级攻略》偏 Java 作为工业级主语言；**客户端转后端可优先 Go 或 Kotlin**；若选 Node，按 12 补齐事件循环、中间件、连接池与幂等话术。
 
 3. **最小后端栈**（详解见 [03-minimal-backend-stack.md](./03-minimal-backend-stack.md)）  
    - **Web 框架 + 路由**：Method+Path → Handler；中间件链 ≈ 客户端拦截器；统一 JSON 错误  
@@ -510,13 +515,708 @@
 
 《左耳听风》给的不是速成清单，而是：**高标准、重本质、靠实践**。按 L0→L5 走完一轮，你将不再只是「会调接口的客户端」，而是能与后端对等讨论设计、能独自扛一块服务的工程师。
 
-下一篇：[02-interview-qa.md](./02-interview-qa.md) — 后端面试题与参考答案。
+下一篇：[02-interview-qa.md](./02-interview-qa.md) — 后端面试题与参考答案。  
+完整可复制合集：[00-full-copy-pack.md](./00-full-copy-pack.md)。
+
+---
+
+<a id="part-11"></a>
+
+# ========== PART 11：L0 HTTP 服务端视角 + Node 落地（11） ==========
+
+# HTTP 再学一遍（服务端视角）+ Node.js 落地
+
+> 对应练级 L0「HTTP 再学一遍」。目标：从「我会用 OkHttp/URLSession 调接口」变成「我设计的接口让客户端敢重试、状态码说得清、Header 有契约」。  
+> 实现语言以 **Node.js / TypeScript** 为主（Express / Fastify 示意通用）。
+
+---
+
+## 0. 先分清三个词
+
+| 词 | 含义 | 例子 |
+|----|------|------|
+| **安全（Safe）** | 不改变服务器资源状态（只读） | GET、HEAD |
+| **幂等（Idempotent）** | 同一请求做 1 次和 N 次，**副作用相同** | GET、PUT、DELETE；带幂等键的 POST |
+| **可缓存** | 响应可被缓存复用 | 常配合 GET + 缓存头 / ETag |
+
+客户端弱网会 **重试**。服务端若方法语义乱、状态码乱、无幂等，重试就会制造双单、双扣款。
+
+---
+
+## 1. 方法语义（服务端怎么选）
+
+### 1.1 对照表
+
+| 方法 | 安全 | 幂等 | 典型用途 | 服务端注意 |
+|------|------|------|----------|------------|
+| **GET** | ✅ | ✅ | 读列表/详情 | 禁止在 GET 里改库、发短信、扣库存 |
+| **HEAD** | ✅ | ✅ | 只要头、不要 body | 与 GET 同路径语义一致 |
+| **PUT** | ❌ | ✅ | 用客户端给的完整表示 **覆盖** 资源 | 同一 URL 多次 PUT = 同一最终状态 |
+| **DELETE** | ❌ | ✅ | 删除资源 | 删一次与删多次：资源都「不在了」（可 200/204 或二次 404，团队统一） |
+| **POST** | ❌ | ❌（默认） | 创建、触发动作、非幂等写 | **默认可重试不安全** → 要 `Idempotency-Key` / 业务唯一键 |
+| **PATCH** | ❌ | 看实现 | 部分更新 | 规范上不保证幂等；做成幂等需约定 |
+
+### 1.2 设计口诀
+
+```text
+只读          → GET
+创建新资源      → POST /items          （配幂等键）
+按 id 整份覆盖 → PUT  /items/{id}
+按 id 删除    → DELETE /items/{id}
+触发「做一次」 → POST /orders/{id}/pay （更要幂等键）
+```
+
+### 1.3 和客户端重试的关系
+
+| 客户端行为 | 服务端必须 |
+|------------|------------|
+| GET 失败自动重试 | GET 真只读；5xx/网络错可重试；4xx 一般别盲目重试 |
+| POST 下单超时重试 | **幂等键或订单唯一约束**，否则双单 |
+| 收到 502/503 | 可退避重试；你返回要对：过载用 503 + `Retry-After` |
+| 收到 400/401/403/404/409 | **不要当网络抖**去重试同一坏请求 |
+
+---
+
+## 2. 状态码分层
+
+### 2.1 三层怎么用
+
+| 层 | 含义 | 调用方怎么做 |
+|----|------|--------------|
+| **2xx** | 成功 | 解析 body，更新 UI |
+| **4xx** | **客户端错**（请求本身有问题） | 改请求 / 重新登录；**默认不重试** |
+| **5xx** | **服务端错**（我这边挂了或过载） | 可退避重试；看 `Retry-After` |
+
+常见码（服务端视角）：
+
+| 码 | 何时用 | 备注 |
+|----|--------|------|
+| 200 | 成功带 body | GET/POST 结果 |
+| 201 | 创建成功 | POST 创建；可带 `Location` |
+| 204 | 成功无 body | DELETE/PUT 常用 |
+| 304 | 未修改 | 配合 ETag 条件 GET |
+| 400 | 参数/JSON 不合法 | 校验失败 |
+| 401 | 未认证 | 缺/坏 Token |
+| 403 | 已认证无权限 | 别用 401 糊弄 |
+| 404 | 资源不存在 | |
+| 409 | 冲突 | 唯一键冲突、状态机不允许 |
+| 422 | 语义对但业务校验失败 | 看团队是否与 400 合并 |
+| 429 | 限流 | **必带** `Retry-After` 更佳 |
+| 500 | 未处理异常 | 少用；应观测告警 |
+| 502/503/504 | 网关/过载/上游超时 | Nginx/Node 超时预算要对齐 |
+
+### 2.2 统一错误 JSON（建议）
+
+```json
+{
+  "error": {
+    "code": "IDEMPOTENCY_CONFLICT",
+    "message": "Idempotency-Key reused with different body",
+    "request_id": "01JB…"
+  }
+}
+```
+
+规则：所有 4xx/5xx 尽量同结构；`request_id` 与日志一致，方便客户端甩锅给你查。
+
+---
+
+## 3. 关键 Header（服务端要认、要回）
+
+### 3.1 `Authorization`
+
+```text
+Authorization: Bearer <JWT>
+```
+
+服务端：校验签名/过期 → 注入 `userId` → 再进业务。  
+失败：401（未带/坏票）vs 403（票对但没权）。
+
+### 3.2 `Idempotency-Key`（POST 救星）
+
+客户端为「这一次用户动作」生成唯一键（UUID），重试带 **同一把键**：
+
+```text
+POST /api/orders
+Idempotency-Key: 7c9e…-…
+```
+
+服务端：
+
+```text
+若 key 未见过 → 执行业务 → 存 (key → response/status)
+若 key 见过且请求体相同 → 直接返回上次响应（真幂等）
+若 key 见过但请求体不同 → 409
+```
+
+存储：Redis（TTL 24h）或 DB 唯一表。
+
+### 3.3 `ETag` / `If-None-Match`（缓存与防丢更新）
+
+```text
+响应：ETag: "v12"
+再请求：If-None-Match: "v12"  → 未变则 304
+写更新：If-Match: "v12"     → 版本不对则 412（防丢更新）
+```
+
+列表日志场景也可对「整页结果」短缓存，但权限 key 必须带 `userId`。
+
+### 3.4 分页头 / 限流头
+
+| Header | 方向 | 含义 |
+|--------|------|------|
+| `Link` 或 body 内 `nextCursor` | 响应 | 下一页（本项目日志列表更常用 cursor） |
+| `X-Request-Id` / `X-Request-ID` | 请求或响应 | 追踪；无则服务端生成 |
+| `Retry-After` | 响应 | 429/503 时建议多久后重试（秒） |
+| `X-RateLimit-Limit/Remaining` | 响应 | 可选，告知配额 |
+
+Nginx `$request_id` 可透传成 `X-Request-Id`，Node 写入日志。
+
+---
+
+## 4. 客户端经验 → 服务端契约
+
+你在端上写过的东西，服务端要这样接：
+
+| 客户端做法 | 服务端配合 |
+|------------|------------|
+| 超时重试 GET | GET 只读；超时返回 504/放弃，别半写 |
+| 超时重试 POST | 必须幂等键或唯一约束 |
+| Token 过期刷新 | 过期 JWT → 401；刷新接口清晰 |
+| 429 退避 | 认真返回 429 + Retry-After |
+| 幂等重试同一单 | 同 Idempotency-Key 返回同一结果，不要第二次再扣款 |
+| 取消请求 | 服务端可用 AbortSignal；回填类可与响应脱钩异步做 |
+
+---
+
+## 5. Node.js 详细落地
+
+### 5.1 路由按 Method 分开（Fastify 示意）
+
+```js
+// GET 只读
+fastify.get('/api/logs', { preHandler: [auth] }, listLogs);
+
+// POST 创建：强制幂等键
+fastify.post('/api/orders', { preHandler: [auth, requireIdempotencyKey] }, createOrder);
+
+// PUT 覆盖
+fastify.put('/api/items/:id', { preHandler: [auth] }, putItem);
+
+// DELETE
+fastify.delete('/api/items/:id', { preHandler: [auth] }, deleteItem);
+```
+
+Express 同理：`app.get` / `app.post`，**不要**一个 handler 里用 query `?action=delete` 冒充 REST。
+
+### 5.2 统一响应与错误中间件
+
+```js
+class HttpError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+fastify.setErrorHandler((err, req, reply) => {
+  const status = err.status ?? 500;
+  const request_id = req.id;
+  req.log.error({ err, request_id }, 'request failed');
+  reply.code(status).send({
+    error: {
+      code: err.code ?? (status >= 500 ? 'INTERNAL' : 'BAD_REQUEST'),
+      message: status >= 500 ? 'internal error' : err.message,
+      request_id,
+    },
+  });
+});
+```
+
+业务里：`throw new HttpError(409, 'CONFLICT', 'duplicate order')`。
+
+### 5.3 Authorization 中间件
+
+```js
+async function auth(req) {
+  const h = req.headers.authorization;
+  if (!h?.startsWith('Bearer ')) {
+    throw new HttpError(401, 'UNAUTHORIZED', 'missing bearer token');
+  }
+  try {
+    req.user = await verifyJwt(h.slice(7));
+  } catch {
+    throw new HttpError(401, 'UNAUTHORIZED', 'invalid token');
+  }
+}
+```
+
+### 5.4 Idempotency-Key 中间件（POST）
+
+```js
+import crypto from 'node:crypto';
+
+function hashBody(body) {
+  return crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
+}
+
+async function requireIdempotencyKey(req) {
+  const key = req.headers['idempotency-key'];
+  if (!key || typeof key !== 'string') {
+    throw new HttpError(400, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key required');
+  }
+  req.idempotencyKey = key;
+}
+
+async function withIdempotency(req, reply, handler) {
+  const key = `idem:${req.user.sub}:${req.idempotencyKey}`;
+  const bodyHash = hashBody(req.body);
+  const cached = await redis.get(key);
+  if (cached) {
+    const prev = JSON.parse(cached);
+    if (prev.bodyHash !== bodyHash) {
+      throw new HttpError(409, 'IDEMPOTENCY_CONFLICT', 'key reused with different body');
+    }
+    return reply.code(prev.status).send(prev.body);
+  }
+
+  const result = await handler(); // { status, body }
+  await redis.setex(key, 86400, JSON.stringify({
+    bodyHash,
+    status: result.status,
+    body: result.body,
+  }));
+  return reply.code(result.status).send(result.body);
+}
+
+// 使用
+fastify.post('/api/orders', { preHandler: [auth, requireIdempotencyKey] }, async (req, reply) => {
+  return withIdempotency(req, reply, async () => {
+    const order = await createOrderTx(req.user.sub, req.body);
+    return { status: 201, body: order };
+  });
+});
+```
+
+与 DB 唯一约束可双保险：`UNIQUE(user_id, idempotency_key)`。
+
+### 5.5 ETag 条件 GET（示意）
+
+```js
+fastify.get('/api/items/:id', async (req, reply) => {
+  const item = await db.item.find(req.params.id);
+  if (!item) throw new HttpError(404, 'NOT_FOUND', 'item not found');
+
+  const etag = `"${item.version}"`;
+  if (req.headers['if-none-match'] === etag) {
+    return reply.code(304).send();
+  }
+  reply.header('ETag', etag);
+  return item;
+});
+```
+
+### 5.6 限流响应
+
+```js
+// 应用层令牌桶触发时
+reply
+  .header('Retry-After', '2')
+  .code(429)
+  .send({ error: { code: 'RATE_LIMITED', message: 'too many requests', request_id: req.id } });
+```
+
+Nginx `limit_req` 也可直接 429；两边策略要一致，避免一端松一端死。
+
+### 5.7 分页（cursor）响应形状
+
+```js
+return {
+  items,
+  nextCursor: next ?? null,  // 不要暴露裸 SQL offset
+};
+// 或头：Link: <...&cursor=xxx>; rel="next"
+```
+
+改筛选条件必须让客户端丢弃旧 cursor（服务端校验 `filtersHash`）。
+
+### 5.8 和日志查询项目的对应
+
+| HTTP 点 | 本项目 |
+|---------|--------|
+| GET `/api/logs` | 只读列表；可短缓存；可重试 |
+| 查询无 body 副作用 | 禁止在 GET 里触发「无锁狂写」；回填要 singleflight |
+| 4xx | 缺 userId/时间窗 → 400；无权限 → 403 |
+| 5xx / 超时 | HDFS/ES 挂 → 503/504；客户端可退避 |
+| 限流 | Nginx + 应用 429 |
+| 幂等 | 列表 GET 天然幂等；回填写 ES 靠 `_id` 幂等（不是 HTTP 幂等键，但是同一思想） |
+
+### 5.9 Node 易错清单
+
+| 错 | 后果 | 改 |
+|----|------|-----|
+| GET handler 里改库 | 重试变双写 | 写操作换 POST/PUT |
+| POST 无幂等键 | 弱网双单 | Idempotency-Key + 存储 |
+| 啥错都 500 | 客户端乱重试 | 分 4xx/5xx |
+| 校验失败仍 200 + `{ok:false}` | 客户端难写 | 用真状态码 |
+| 每请求 `new Client()` | 连接池炸 | 单例 + maxSockets |
+| 忽略 `req.aborted` / AbortSignal | 客户端已走你还算 | 长 IO 可取消或与回填脱钩 |
+
+---
+
+## 6. 最小自测清单
+
+- [ ] GET 连续打 10 次无多余写库  
+- [ ] POST 带同一 Idempotency-Key 打 10 次只有 1 次业务副作用  
+- [ ] 换 body 同 Key → 409  
+- [ ] 坏 Token → 401；无权限 → 403  
+- [ ] 限流 → 429 且有 Retry-After（或文档说明）  
+- [ ] 错误 JSON 含 `request_id`，能对上日志  
+
+---
+
+## 7. 面试收口
+
+> HTTP 方法告诉客户端「能不能放心重试」；状态码告诉「怪谁、能不能重试」；Idempotency-Key / ETag / 限流头是契约。  
+> Node 侧用 Method 路由 + 鉴权中间件 + 幂等中间件 + 统一错误层落地；POST 默认不幂等，必须显式设计。
+
+---
+
+## 8. 相关文档
+
+- [01-leveling-guide.md](./01-leveling-guide.md) — L0  
+- [03-minimal-backend-stack.md](./03-minimal-backend-stack.md) — 路由/日志/探活  
+- [08-l4-distributed-resilience-performance.md](./08-l4-distributed-resilience-performance.md) — 重试与幂等  
+- [02-interview-qa.md](./02-interview-qa.md) — 相关面试题
+
+---
+
+<a id="part-12"></a>
+
+# ========== PART 12：L0 Node.js 面试向详解（12） ==========
+
+# L0：Node.js 后端入门（面试向详解）
+
+> 面向：**客户端转后端、主语言选 Node/TypeScript**。  
+> 目标：面试能讲清「为什么用 Node、事件循环、异步、中间件、进程与连接池、和浏览器 JS 的差别」，并能落到最小 HTTP 服务。  
+> 配合：[11-http-server-nodejs.md](./11-http-server-nodejs.md)、[03-minimal-backend-stack.md](./03-minimal-backend-stack.md)、日志场景 [10](./10-log-cold-hot-es-nginx.md) / 面试 I5。
+
+---
+
+## 1. 面试开场：为什么选 Node 做后端？
+
+**高分答法（客户端背景）**：
+
+> 我来自 RN/前端，用 Node/TS 迁移成本低，能快速把「会调 API」做成「会提供 API」。Node 适合 **IO 密集**（等 DB/Redis/ES/HTTP），和客户端异步网络模型同构。代价是要补：**事件循环边界、类型、多实例状态、连接池总账**，不能把浏览器思维原样搬过来。
+
+| 适合 | 不太适合（入门阶段如实说） |
+|------|---------------------------|
+| API 网关后的 BFF、CRUD、日志查询、实时消息（配合 WS） | CPU 重（大包同步 JSON、视频转码）→ Worker / 别的语言 |
+| 快速原型、TS 全栈 | 强一致复杂事务中枢也可做，但团队栈更常是 Java/Go |
+
+---
+
+## 2. 和浏览器 JS 的关键差别（必考）
+
+| 点 | 浏览器 | Node 后端 |
+|----|--------|-----------|
+| 全局 | `window` / DOM | **无 DOM**；有 `process`、`Buffer`、`fs`、`net` |
+| 模块 | 历史杂、现 ESM | CommonJS `require` / ESM `import`（面试说清项目用哪种） |
+| 入口 | 页面生命周期 | **进程**：一个 `node app.js` 监听端口 |
+| 保密 | 密钥不能放前端 | 密钥只在服务端环境变量 |
+| 并发 | 多 Tab 多线程感 | **单线程 JS + 线程池做 IO**；CPU 重活会堵所有请求 |
+
+口试金句：Node 不是「单线程什么都不能做」，而是 **JS 回调在单线程；libuv 用线程池/epoll 做 IO**。
+
+---
+
+## 3. 事件循环（Event Loop）——高频深挖
+
+### 3.1 一句话
+
+> 主线程跑完同步代码后，按阶段取任务队列执行；`fs`/网络完成时把回调丢进队列，**不会并行执行两段 JS**。
+
+### 3.2 面试常画的简化图
+
+```text
+同步代码
+  → process.nextTick / microtask（Promise.then）
+  → 定时器 timers（setTimeout）
+  → IO 回调（网络、文件）
+  → setImmediate / close
+  → 再转下一圈
+```
+
+### 3.3 会翻车的点（结合本项目）
+
+| 行为 | 后果 | 改法 |
+|------|------|------|
+| 请求里同步 `JSON.parse` 巨大日志包 | 所有用户 P99 爆炸 | 流式按行解析 |
+| 同步 `fs.readFileSync` | 卡死 loop | 只用 async API |
+| 超大 `JSON.stringify` 响应 | 同样卡 | 分页、截断 preview |
+| 在 handler 里算 cropto 重哈希 | 卡 | `crypto` 异步或 Worker |
+
+**监控**：`event loop lag`（延迟多少毫秒才轮到下一圈）。
+
+### 3.4 口述题：「Node 如何处理高并发？」
+
+> 不是一人一线程，而是单线程非阻塞 IO：一万个连接大多在等，回调来了才占 CPU 一小段。并发上限受 **event loop、内存、下游连接池** 约束，所以要限流、`maxSockets`、避免重 CPU。
+
+---
+
+## 4. 异步模型（Promise / async-await / 错误）
+
+### 4.1 后端标配
+
+```js
+async function listLogs(req, reply) {
+  try {
+    const rows = await es.search(...);
+    return rows;
+  } catch (e) {
+    req.log.error(e);
+    throw e; // 交给统一 error handler
+  }
+}
+```
+
+### 4.2 面试要点
+
+| 题 | 答 |
+|----|----|
+| 回调地狱怎么解决 | Promise / async-await；仍要统一错误处理 |
+| `await` 会阻塞进程吗 | **只阻塞当前异步函数的后续**，不阻塞其它请求的 JS（除非你写同步重活） |
+| 未处理的 Promise rejection | 可能打日志或在严模式下影响进程 → 框架层 + `unhandledRejection` 观测 |
+| 并行请求下游 | `Promise.all` / `allSettled`；注意下游连接池被放大 |
+
+### 4.3 与 HTTP 超时
+
+```text
+客户端超时 < Nginx read < Node 对下游的 timeout
+AbortSignal / 取消：客户端断开后别无限占着 ES 连接
+```
+
+---
+
+## 5. 模块、项目结构、TypeScript
+
+### 5.1 面试怎么说模块
+
+- **CommonJS**：`require` / `module.exports`（老项目）  
+- **ESM**：`import` / `export`（`"type":"module"`）  
+- 循环依赖：初始化顺序问题 → 分层、延迟 require  
+
+### 5.2 L0 推荐目录
+
+```text
+src/
+  app.ts          # 创建服务器、挂路由
+  config.ts       # 环境变量，缺必填即退出
+  routes/
+  middleware/     # auth、idempotency、requestId
+  services/       # 业务，不碰 req/res
+  clients/        # es.ts redis.ts 单例
+```
+
+### 5.3 TypeScript 面试加分
+
+> 后端用 TS 是为了 **契约与重构安全**，不是为了「像前端一样写界面」。DTO、错误码、配置用类型固定；`any` 留给边界并尽快收窄。
+
+---
+
+## 6. HTTP 服务：Express vs Fastify（面试选型）
+
+| | Express | Fastify |
+|--|---------|---------|
+| 生态 | 最大、教程多 | 更快、schema 校验一流 |
+| 中间件 | `(req,res,next)` | hook / preHandler |
+| L0 建议 | 都会一点 | 新项目可 Fastify |
+
+**共同点（必讲）**：
+
+1. Method + Path → Handler  
+2. 中间件链 ≈ 客户端拦截器（鉴权 → 日志 → 业务）  
+3. 统一错误与 JSON  
+4. `listen(port)` + 优雅关闭（`SIGTERM` 停接新请求、等飞行中请求）
+
+---
+
+## 7. 中间件链（对照客户端拦截器）
+
+```text
+Request
+  → requestId
+  → accessLog
+  → auth          // Authorization
+  → idempotency   // POST
+  → handler
+  → errorHandler
+Response
+```
+
+面试映射：
+
+| 客户端 | Node |
+|--------|------|
+| OkHttp Interceptor | middleware / hook |
+| 统一加 Token | auth 中间件 |
+| 统一解包错误 | errorHandler + 状态码 |
+
+详见 [11-http-server-nodejs.md](./11-http-server-nodejs.md)。
+
+---
+
+## 8. 配置、日志、探活（L0 最小栈用 Node 实现）
+
+### 8.1 配置
+
+```js
+function required(name) {
+  const v = process.env[name];
+  if (!v) {
+    console.error(`missing env ${name}`);
+    process.exit(1);
+  }
+  return v;
+}
+export const config = {
+  port: Number(process.env.PORT ?? 3000),
+  esUrl: required('ES_URL'),
+  redisUrl: required('REDIS_URL'),
+};
+```
+
+面试：**十二要素**——配置进环境变量；密钥不进镜像层乱写。
+
+### 8.2 结构化日志
+
+一行 JSON：`time, level, request_id, method, path, status, latency_ms, err`。  
+框架：`pino`（Fastify 默认）优于 `console.log` 字符串拼接。
+
+### 8.3 健康检查
+
+```js
+app.get('/healthz', async () => ({ ok: true }));
+// L1+：readiness 再查 Redis/ES ping
+```
+
+---
+
+## 9. 进程、cluster、连接池（面试常连问）
+
+### 9.1 默认单进程
+
+```text
+总 ES 连接 ≈ 1 × maxSockets
+```
+
+### 9.2 多进程
+
+- `cluster` / PM2 `instances`  
+- K8s：多 Pod，每 Pod 常 **1 进程**  
+
+```text
+总连接 ≈ 进程数(或 Pod 数) × maxSockets
+```
+
+### 9.3 单例 Client
+
+```js
+// clients/es.ts —— 模块级单例，禁止在 handler 里 new Client()
+export const es = new Client({ node, agent: { https: new Agent({ maxSockets: 32 }) } });
+```
+
+### 9.4 多实例不能共享的内存
+
+| 能放进程内存 | 必须外置 |
+|--------------|----------|
+| 单次请求内状态 | Session、幂等结果、warm、分布式锁 |
+| singleflight Map（仅本进程） | 跨 Pod 用 Redis SET NX |
+
+---
+
+## 10. L0 用 Node 做项目 A 的验收话术
+
+面试官：你 L0 项目怎么证明会做服务端？
+
+> 我用 Node+TS 做了书签/待办 API：JWT 鉴权、CRUD、cursor 分页、请求 ID 日志、`/healthz`、Docker Compose。故意用客户端弱网重试 POST，靠 Idempotency-Key 保证不双写；GET 可重试。能讲清 4xx/5xx 和超时预算。
+
+---
+
+## 11. 高频面试题速答（L0 Node）
+
+### Q1. Node 是单线程的，怎么撑住线上流量？
+
+非阻塞 IO + 多连接等待；水平扩展多进程/多 Pod；下游连接池与限流；CPU 密集卸载。
+
+### Q2. `require` 和 `import` 区别？
+
+加载时机、循环依赖、是否严格 ESM；项目统一一种。
+
+### Q3. 如何优雅重启？
+
+`SIGTERM` → 停止 listen → 等 in-flight（设上限）→ 关闭 DB/Redis → exit。K8s 配 `preStop`/grace period。
+
+### Q4. 内存泄漏常见原因？
+
+全局缓存无上限、未结束的监听器、闭包抓住大 buffer、singleflight Map 未 delete。
+
+### Q5. 和 Java Spring 比，Node 弱在哪？
+
+你主动说：CPU、强类型生态、部分企业中间件；并说你如何用 TS、测试、规范补。
+
+### Q6. 日志查询场景为何 Node 合适？
+
+IO 等待 HDFS/ES/Redis；用 singleflight、流式解析、Bulk 异步；注意 loop 与连接池（见 I5）。
+
+### Q7. 什么是中间件？
+
+请求管道上可插拔的函数，处理横切逻辑（鉴权、日志、幂等），与业务 handler 分离。
+
+### Q8. POST 为何要 Idempotency-Key？
+
+HTTP 语义上 POST 不幂等；客户端超时重试会导致双份副作用；服务端用键去重。
+
+### Q9. 如何限制对 ES 的连接？
+
+全局 Client + `Agent.maxSockets` + 可选 p-limit；总账=进程数×maxSockets。
+
+### Q10. `process.nextTick` 和 `setImmediate`？
+
+nextTick 更高优先（耗尽风险）；setImmediate 偏下一轮 check 阶段。业务代码优先 async/await，少炫技。
+
+---
+
+## 12. 学习路径（2～4 周 L0）
+
+| 周 | 做什么 | 面试能秀什么 |
+|----|--------|--------------|
+| 1 | HTTP 方法/状态码 + 最小 Fastify/Express | 讲清安全/幂等 |
+| 2 | JWT、错误模型、结构化日志、Docker | 项目 A 可演示 |
+| 3 | Idempotency-Key、限流 429、超时预算 | 弱网重试故事 |
+| 4 | 连接池、健康检查、读写分离概念预习 | 为 L1 SQL 铺路 |
+
+---
+
+## 13. 收口（面试 30 秒版）
+
+> Node 适合 IO 型 API；核心是事件循环别被同步重活堵住。用 TS+框架做 Method 路由与中间件，配置走环境变量，Client 单例控 `maxSockets`。POST 配幂等键，错误用对 4xx/5xx。多实例状态放 Redis。客户端经验帮我理解重试与超时，服务端要把它变成契约。
+
+---
+
+## 14. 相关文档
+
+- [11-http-server-nodejs.md](./11-http-server-nodejs.md)  
+- [03-minimal-backend-stack.md](./03-minimal-backend-stack.md)  
+- [02-interview-qa.md](./02-interview-qa.md) I5  
+- [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md)
 
 ---
 
 <a id="part-03"></a>
 
-# ========== PART 03：L0 最小后端栈详解 ==========
+# ========== PART 03：L0 最小后端栈（03） ==========
 
 # 最小后端栈详解
 
@@ -962,7 +1662,7 @@ JSON 响应；错误含稳定 code
 
 <a id="part-04"></a>
 
-# ========== PART 04：L1 入门与修养详解 ==========
+# ========== PART 04：L1 入门与修养（04） ==========
 
 # L1 — 后端入门与修养（4–8 周）详解
 
@@ -1453,7 +2153,7 @@ L1 出师后进入 [01-leveling-guide.md](./01-leveling-guide.md) 的 **L2 专�
 
 <a id="part-05"></a>
 
-# ========== PART 05：L1 关系数据库基础详解 ==========
+# ========== PART 05：L1 关系数据库基础（05） ==========
 
 # 关系数据库基础详解（L1）
 
@@ -1876,7 +2576,7 @@ db/migrations/
 
 <a id="part-06"></a>
 
-# ========== PART 06：L2 专业基础详解 ==========
+# ========== PART 06：L2 专业基础（06） ==========
 
 # L2 — 专业基础（2–3 个月）详解
 
@@ -2267,7 +2967,7 @@ PATCH /v1/notes/{id}
 
 <a id="part-07"></a>
 
-# ========== PART 07：L3 软件设计与编程范式详解 ==========
+# ========== PART 07：L3 软件设计与范式（07） ==========
 
 # L3 — 软件设计与编程范式详解
 
@@ -2637,7 +3337,7 @@ L3 与 L2/L4 **并行**：
 
 <a id="part-08"></a>
 
-# ========== PART 08：L4 分布式、弹力与性能详解 ==========
+# ========== PART 08：L4 分布式弹力与性能（08） ==========
 
 # L4 — 分布式、弹力与性能详解
 
@@ -3040,7 +3740,7 @@ Client → Gateway/API(限流)
 
 <a id="part-09"></a>
 
-# ========== PART 09：L5 架构进阶与高手成长详解 ==========
+# ========== PART 09：L5 架构进阶与高手成长（09） ==========
 
 # L5 — 架构进阶与「高手成长」详解
 
@@ -3394,9 +4094,485 @@ SLO / 容量
 
 ---
 
+<a id="part-10"></a>
+
+# ========== PART 10：日志冷热 HDFS + ES + Nginx（10） ==========
+
+# 日志冷热架构：HDFS 真相源 + 查询回填 ES + Nginx 限流
+
+> **日志列**：发生时间、功能模块、代码文件:行号、附加内容。  
+> **真相源**：**HDFS** — 上报只保证写入 HDFS。  
+> **HDFS 取数键**：**userId → 该用户最近一次上报的日志包**（一次上报内可含多行）；**无 fileUri、无 logId 回源**。  
+> **列表 query**：**userId + 时间范围 + module + 可选筛选** — **不含 logId / fileUri**。  
+> **ES**：列表 miss 时，解析该次上报包 → 按条件过滤 → 写入 **瘦文档**，之后列表可走 ES。  
+> **全文 extra**：仍在同一次上报包的行内；展开时 **再次按 userId 取最近上报包**，用行字段（eventTime/module/file/line 等）匹配，**不写 ES**。  
+> 后台 **Node.js**。
+
+---
+
+## 1. 架构定位
+
+| 层 | 角色 |
+|----|------|
+| **HDFS** | 真相源；**按 userId 存放上报包**；查询时取 **该用户最近一次上报** |
+| Elasticsearch | 列表加速：按 eventTime + module（+ 辅筛）分页；由列表 miss 从「最近上报包」回填瘦文档 |
+| API | 列表：ES → miss 则 `hdfs.latestUpload(userId)` → 过滤 → 首屏直出 + 异步 Bulk；全文：再取同包匹配行 |
+| Nginx | TLS、路由、列表限流 |
+
+```text
+上报：
+  客户端一次上报（可含多行完整日志，含 extra）
+  → 写入 HDFS：/logs/{userId}/latest  （或 /logs/{userId}/{uploadTs}，查询取最新）
+  → ES 不同步写满
+
+查询：
+  GET /api/logs?userId&from&to&module&file&line&q&cursor
+       │  （无 logId、无 fileUri）
+       ├─ ES 已有该 user 该条件段？→ search_after 返回瘦行
+       └─ miss → HDFS.getLatestUpload(userId)
+                → 流式解析包内每一行
+                → 按 from/to/module/… 过滤
+                → 首屏直出 + 异步 Bulk 瘦文档进 ES
+
+展开某一行全文：
+  → 再次 HDFS.getLatestUpload(userId)（或短缓存该包）
+  → 用列表行上的 eventTime+module+file+line(+preview) 匹配到包内行
+  → 返回该行完整 extra
+  → 不写 ES、无 logId、无 fileUri
+```
+
+### 1.1 字段与 API 契约
+
+| 字段 | 列表 query？ | 进 ES？ | 说明 |
+|------|--------------|---------|------|
+| `userId` | **必有** | keyword | **唯一 HDFS 取数键**（再取「最近一次上报」） |
+| `from` / `to` | **必有** | 对应 eventTime range | 时间窗 |
+| `module` | 常用 | keyword 主维 | 如 network / route |
+| `file` / `line` / `q` | 可选 | 辅筛 / preview match | |
+| `cursor` | 翻页 | — | 改条件须重置 |
+| `extra` | 否 | **不进** | 只在上报包行内 |
+| `extraPreview` | 否（仅响应） | 短文本 | 列表展示 |
+| ~~logId~~ / ~~fileUri~~ | **禁止** | — | 不出现在 query，也不做回源键 |
+
+> **HDFS 路径语义**：不是按时间扫全集群，而是 **`userId` → 最近一次上报包**。时间/模块过滤在 **包内行** 上做。
+
+### 1.2 主从关系
+
+| 能力 | 靠谁 |
+|------|------|
+| 拿到原始数据 | **HDFS：userId → latest upload** |
+| 按时间+模块列表/分页 | 包内过滤；热后走 **ES** |
+| 完整 extra | **同一上报包内匹配行**（可短缓存整包） |
+| 定位某一行 | 列表条件缩小 → 行字段匹配包内行（无 id / fileUri） |
+
+### 1.3 时间 + 模块索引够不够？
+
+**够用做列表主维**（在「已拿到该用户最近上报包」之后）：强制时间窗 + module + 分页。  
+extra 高基数 → 不进 ES 主索引。  
+无时间只查 module → 不够。
+
+```text
+✅ query = userId + from/to + module + 可选筛选
+✅ HDFS = getLatestUpload(userId)
+✅ ES = 瘦文档；_id 可用 hash(userId,eventTime,module,file,line,preview) 仅幂等
+❌ 不要 logId / fileUri 查询或回源
+```
+
+---
+
+## 2. 端到端链路
+
+### 2.1 上报与存放
+
+```text
+一次上报 batch（多行）
+  → HDFS.put(/logs/{userId}/uploads/{uploadId}) 并更新 latest 指针
+  → 或直接覆盖 /logs/{userId}/latest
+行字段：eventTime, module, file, line, extra, userId
+```
+
+「最近一次」= latest 指针指向的那一个包（产品若要「最近 N 次」可扩展，本文默认 **一次**）。
+
+### 2.2 列表 miss → 解析最近上报 → ES
+
+```text
+blob = hdfs.getLatestUpload(userId)
+for row in streamParse(blob):
+  if !match(row, {from,to,module,file,line,q}): continue
+  page / Bulk ← toThinDoc(row)   // 无完整 extra
+```
+
+瘦文档：
+
+```text
+{ eventTime, module, file, line, extraPreview, userId }
+_id = hash(userId, eventTime, module, file, line, extraPreview)
+```
+
+mapping 不再含 `fileUri` / `logId`。
+
+### 2.2.1 Bulk 瘦文档是怎么「起作用」的
+
+两件事叠在一起：**瘦** = 每条 payload 小；**Bulk** = 很多条一次发给 ES。
+
+```text
+HDFS 上报包内一行（胖）
+  eventTime, module, file, line, userId, extra(可能很大)
+        │
+        ▼ toThinDoc
+ES 瘦文档（小）
+  eventTime, module, file, line, userId, extraPreview(截断)
+  —— 丢掉完整 extra ——
+        │
+        ▼ 凑满 500～2000 条
+ES Bulk API 一次提交
+  { index: {_index, _id: rowKey} }
+  { ...thin... }
+  { index: ... }
+  { ...thin... }
+  …
+```
+
+| 环节 | 起什么作用 |
+|------|------------|
+| **丢掉 extra** | 索引体积、倒排、`_source`、merge、堆内存都小；列表本来也不展示全文 |
+| **只留主维+preview** | 之后 `filter(userId+时间+module)` + 分页能直接在 ES 完成，**不必再拉 HDFS 包** |
+| **Bulk 一批写** | 比逐条 `index` 少几十～上百倍 HTTP/刷新开销；回填吞吐上去 |
+| **`_id=rowKey` 幂等** | 同一行灌两次是覆盖/冲突，不产生重复文档；惊群重试安全 |
+| **异步 Bulk + 首屏直出** | 用户先拿到内存筛好的一页；ES 在后台变热，**第二次查询走 ES 才「感受到」瘦文档的收益** |
+
+对查询路径的效果（第一次 vs 第二次）：
+
+```text
+冷（无瘦文档）：userId → HDFS 最新包 → 内存过滤 → 返回
+                └─ 同时 Bulk 瘦文档进 ES，Redis 打 warm
+
+热（有瘦文档）：list 条件 → ES search_after → 返回
+                └─ 不再读 HDFS（除非展开全文再取包）
+```
+
+一句话：**瘦文档让「列表要的字段」廉价地住在 ES 里；Bulk 让这次搬家搬得快；warm 之后列表才稳定享受 ES 速度。**
+
+### 2.3 列表 query 契约
+
+```text
+GET /api/logs?userId=u1&from=…&to=…&module=network&file&line&q&limit&cursor
+
+禁止：logId、fileUri
+响应 items[]：eventTime, module, file, line, extraPreview, userId
+```
+
+### 2.4 全文：再取最近上报包 + 行匹配
+
+```text
+expand(userId, rowHint):  // rowHint 来自列表行：eventTime,module,file,line,extraPreview
+  blob = cache or hdfs.getLatestUpload(userId)
+  row = findLine(blob, rowHint)
+  return row.extra
+  // 不写 ES
+```
+
+若最近又发生新上报，包已变：以 **当前 latest** 为准；匹配不到则提示「日志包已更新，请重新查询列表」。
+
+---
+
+## 3. 并发：同一用户列表 +「最近上报 → ES」
+
+「同一段」= 同一 `userId` + 相近列表条件（尤其同一 module 窗）。
+
+### 3.1 问题
+
+| 现象 | 原因 |
+|------|------|
+| 读放大 | 同条件反复 ES search |
+| 回填惊群 | N 请求同时 `getLatestUpload` + 解析 + Bulk |
+| HDFS 打穿 | 同 user 最新包被反复拉取 |
+| 包更新竞态 | 查询中用户又上报，latest 指针变化 |
+
+### 3.2 读路径（ES 已热）
+
+- filter：`userId` + `eventTime` + `module` + 辅筛  
+- listKey 短缓存 + 查询 singleflight  
+- search_after：`eventTime` + `rowKey`（`rowKey=_id` 哈希，**不对前端当查询参数**）
+
+```text
+listKey = hash(userId, from, to, module, file, line, q, cursor)
+```
+
+### 3.3 写路径（列表 miss：最近上报包 → ES）
+
+**唯一写 ES 路径**：列表 miss → 拉该 user **最新一次上报** → 过滤 → Bulk 瘦文档。  
+**不做** logId/fileUri 点级回填。
+
+#### A0. 快返
+
+```text
+1. singleflight(userId + uploadId)：整包只拉/解析一次
+2. 流式按条件过滤
+3. 凑满 page → 立刻返回；命中行异步 Bulk
+4. markWarm(userId, uploadId, filtersHash 或时间桶)
+5. 翻页：ES 够则走 ES；包未灌完可继续用内存游标
+```
+
+```text
+blob = getLatestUpload(userId)           // HDFS 只认 userId→最近一次
+uploadId = blob.id / etag / mtime
+lockKey = "backfill:"+userId+":"+uploadId
+
+if tryLock(lockKey):
+  for row in stream(blob):
+    if match(filters): enqueueBulk(toThinDoc(row)); pushPage…
+  markWarm(...); unlock
+else:
+  await 同 uploadId 的解析结果 / 首屏缓存
+```
+
+#### A1. 换 module（network → route）
+
+同一 `userId`、同一最新包：
+
+| 策略 | 做法 |
+|------|------|
+| **一包多用** | 第一次拉包时，侧写包内 **所有 module** 的瘦文档进 ES |
+| 当前 module 优先凑页 | 不挡首屏 |
+| listKey 含 module | 结果页缓存不串 |
+
+同一包只付 **一次 HDFS 读 + 一次解析**；换 module 尽量只打 ES。
+
+#### B. 全文
+
+```text
+同 userId 再取 latest（优先用进程/Redis 短缓存整包，TTL 数十秒）
+→ 行字段匹配 → 返回 extra → 不写 ES
+```
+
+对「同 user 同包」展开做 singleflight，避免重复读 HDFS。
+
+#### C. 不要做
+
+| 不要 | 原因 |
+|------|------|
+| logId / fileUri 查询或回源 | 契约禁止 |
+| 按时间扫全站 HDFS | 本架构是 **按 user 取最近一次上报** |
+| 等整包全进 ES 再返回 | 应用 A0 快返 |
+| 完整 extra 进 ES | 体积爆炸 |
+
+#### D. 「写 ES 的状态」存在哪？
+
+要存的不是业务日志本身（日志在 HDFS / 瘦文档在 ES），而是 **回填控制面状态**：这包灌过没有、谁在灌、灌到哪。
+
+| 状态 | 存哪 | Key 示例 | TTL / 寿命 | 说明 |
+|------|------|----------|------------|------|
+| **latest 指针** | **HDFS**（或上报元数据） | `/logs/{userId}/latest` → uploadId | 随上报更新 | 真相：用户最近一次上报是哪包 |
+| **回填锁** | **Redis** | `backfill:{userId}:{uploadId}` | 短（30～120s）+ 可续期 | 同包只允许一路解析/Bulk |
+| **温标记 warm** | **Redis（主）** | `warm:{userId}:{uploadId}` 或 `warm:{userId}:{uploadId}:all` | 对齐 ES ILM 或略短 | 「此包已灌进 ES」；列表先看它再决定是否拉 HDFS |
+| **分 module 温**（可选） | Redis | `warm:{userId}:{uploadId}:{module}` | 同上 | 若未做「一包侧写全 module」时用 |
+| **回填进度**（可选） | Redis | `backfill:prog:{userId}:{uploadId}` = offset/行号/状态 | 随任务 | 大包断点续灌；小包可省略 |
+| **列表页缓存** | Redis | `list:{listKey}` | 5～30s | 读路径，不是写进度 |
+| **整包短缓存** | 进程内存 / Redis | `blob:{userId}:{uploadId}` | 数十秒 | 降 HDFS 重复读；可只缓存元数据+路径 |
+| **实际已索引内容** | **ES 文档** | `_id=rowKey` | ILM | 真正的数据状态；warm 只是加速判断的缓存 |
+| **回填任务审计**（可选） | MySQL/PG | 任务表 | 长期 | 运维排查；**不**挡请求路径热读 |
+
+推荐默认（够用）：
+
+```text
+HDFS：  latest uploadId（用户最近一次上报）
+Redis： backfill 锁 + warm:{userId}:{uploadId} +（可选）进度
+ES：    瘦文档本身
+```
+
+判定「要不要再写 ES」：
+
+```text
+uploadId = hdfs.latestUploadId(userId)
+
+if redis.get("warm:"+userId+":"+uploadId):
+    → 只读 ES（按列表条件 search）
+else if redis.setNX("backfill:"+userId+":"+uploadId):
+    → 拉包 → Bulk → set warm → del lock
+else:
+    → 等 warm / 共享首屏
+
+若 hdfs.latest 的 uploadId 变了（用户又上报）：
+    旧 warm 自动失效（key 含 uploadId）；对新 uploadId 重新回填
+```
+
+| 不要把状态只放在… | 原因 |
+|-------------------|------|
+| **只靠 ES count 当 warm** | 每次先打 ES；空洞/延迟难区分「未灌」与「条件无数据」 |
+| **只放 Node 进程内存** | 多实例不一致；重启丢锁/丢 warm → 惊群 |
+| **写进 HDFS 日志包内** | 污染真相源；并发更新包危险 |
+| **warm 不带 uploadId** | 用户新上报后仍以为已热，读到旧索引或空窗 |
+
+### 3.4 收口
+
+> HDFS = **`userId` → 最近一次上报包**（含 latest uploadId）。  
+> **写 ES 状态**：锁 / warm / 进度放 **Redis**（key 带 `userId+uploadId`）；数据在 **ES**；latest 在 **HDFS**。  
+> 列表 = 包内过滤 + ES 瘦索引；全文 = 同包行匹配；**无 logId / fileUri**。
+
+---
+
+## 4. ES 查询慢（仅列表）
+
+| 场景 | 做法 |
+|------|------|
+| user + 时间 + 模块 | 全进 filter；缩索引（可按 user 路由或共享日索引 + term userId） |
+| `_source` | 瘦字段 only |
+| 分页 | search_after(eventTime, rowKey) |
+| ~~点查 id / fileUri~~ | 无 |
+
+---
+
+## 5. 主查询与示例
+
+### 5.1 API
+
+```text
+GET /api/logs?userId=u1&from=…&to=…&module=network&limit=50&cursor=…
+```
+
+响应行：
+
+```json
+{
+  "eventTime": "2026-10-18T12:01:02.123Z",
+  "module": "network",
+  "file": "src/net/http_client.ts",
+  "line": 128,
+  "extraPreview": "request timeout after 3000ms…",
+  "userId": "u1"
+}
+```
+
+### 5.2 ES 查询体（热路径）
+
+```json
+{
+  "size": 50,
+  "query": {
+    "bool": {
+      "filter": [
+        { "term": { "userId": "u1" } },
+        { "range": { "eventTime": { "gte": "…", "lte": "…" } } },
+        { "term": { "module": "network" } }
+      ]
+    }
+  },
+  "sort": [{ "eventTime": "desc" }, { "rowKey": "asc" }],
+  "_source": ["eventTime", "module", "file", "line", "extraPreview", "userId"]
+}
+```
+
+`rowKey` 仅内部排序/幂等，**不是**前端 query 参数。
+
+### 5.3 冷路径伪代码
+
+```js
+async function listLogs(params) {
+  // params: userId, from, to, module, file, line, q, cursor — 无 logId/fileUri
+  if (await isWarm(params)) return esSearch(params);
+
+  return singleflight(`upload:${params.userId}`, async () => {
+    const blob = await hdfs.getLatestUpload(params.userId);
+    const page = [];
+    for await (const row of parseLines(blob)) {
+      if (!match(row, params)) continue;
+      enqueueBulk(toThinDoc(row)); // async
+      if (page.length < pageSize) page.push(toThinDoc(row));
+      if (page.length >= pageSize && !needFullWarm) break; // 首屏可先返回，后台继续灌
+    }
+    return { items: page, nextCursor: ..., source: "hdfs_latest_upload" };
+  });
+}
+
+async function readExtra(userId, rowHint) {
+  const blob = await cachedLatestUpload(userId);
+  const row = findInBlob(blob, rowHint);
+  return row?.extra ?? null;
+}
+```
+
+### 5.4 收口
+
+> 取数只认 **userId 的最近一次上报**；筛选认 **时间+模块+辅筛**；全文认 **同包行匹配**。
+
+---
+
+## 6. ES 过期（ILM）
+
+按日或按 `userId` 策略删热索引；再查 → 再拉该 user latest 上报回填。  
+注意：ES 过期 ≠ HDFS latest 包过期；包仍以 HDFS 为准。
+
+---
+
+## 7. Nginx
+
+| 诉求 | Nginx | 应用 |
+|------|-------|------|
+| 多用户列表 | per-user / IP 限流 | listKey 缓存；**per userId 回填锁** |
+| 同 user 冷查惊群 | 限流 | `backfill:userId:uploadId` singleflight |
+| 全文展开 | content 接口限流 | 整包短缓存 + 行匹配 |
+
+无 `/api/logs/{logId}`，无 fileUri 专用 location。
+
+---
+
+## 8. 时序（三请求同 user 冷列表）
+
+```text
+A/B/C 同 userId 查 module=network
+  → A 拉 latest 上报包并加锁 → 过滤 → 首屏 + Bulk（可侧写其它 module）
+  → B/C 等同一 uploadId 结果 / warm → 其后 ES
+换 route：尽量直接 ES（若侧写已完成）
+展开行：读缓存包或再 getLatestUpload → 字段匹配 → extra
+```
+
+---
+
+## 9. Node 要点
+
+- **singleflight 键**：`userId` 或 `userId+uploadId`（拉包/解析），不是 logId  
+- 整包可短缓存（内存/Redis），控制 RSS；超大包流式解析  
+- Bulk 异步；首屏不 await 整包进 ES  
+- 全文不写 ES  
+- 连接池、超时、回填并发上限、event loop lag 同前
+
+---
+
+## 10. 难点汇总
+
+| 难点 | 对策 |
+|------|------|
+| 无 logId / fileUri | HDFS 只按 **userId→最近一次上报**；行靠字段匹配 |
+| 列表筛选 | 包内 filter；热后 ES（时间+module） |
+| 换 module | 一包解析，侧写多模块瘦文档 |
+| 同 user 惊群 | uploadId 级锁 + 整包短缓存 |
+| 上报更新导致包变 | warm 绑定 uploadId；变则重拉；展开匹配失败则提示重查列表 |
+| **写 ES 状态存哪** | Redis：`backfill` 锁 + `warm:{userId}:{uploadId}`；latest 在 HDFS；文档在 ES |
+| extra 体积 | 不进 ES；仅包内 |
+
+---
+
+## 11. 面试收口
+
+> **列表 query**：`userId + 时间 + module + 筛选`，无 logId、无 fileUri。  
+> **HDFS**：`getLatestUpload(userId)` —— 用户最近一次上报的日志包。  
+> **ES**：列表 miss 时从该包过滤后 Bulk 瘦文档；**warm/锁在 Redis（含 uploadId）**。  
+> **全文**：再取同包，用行字段匹配；不写 ES。
+
+---
+
+## 12. 相关文档
+
+- [02-interview-qa.md](./02-interview-qa.md) — I4  
+- [08-l4-distributed-resilience-performance.md](./08-l4-distributed-resilience-performance.md)  
+- [06-l2-professional-fundamentals.md](./06-l2-professional-fundamentals.md)
+
+---
+
 <a id="part-02"></a>
 
-# ========== PART 02：后端面试题与参考答案 ==========
+# ========== PART 02：面试题与参考答案（02） ==========
 
 # 后端开发面试题与参考答案
 
@@ -3784,16 +4960,178 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 **要点**：  
 - 列：`eventTime`、`module`（**高重复**）、`file`/`line`、`extra`（**几乎不重复**）  
 - **列表 query**：**userId + from/to + module + 可选筛选**；**无 logId、无 fileUri**  
-- **HDFS**：**userId → 最近一次上报包**；包内过滤；列表 miss → Bulk 瘦文档  
-- **全文**：再取同包行匹配；不写 ES  
+- **HDFS 取数**：**userId → 该用户最近一次上报的日志包**；包内再按时间/模块过滤  
+- **ES**：仅列表 miss → 解析该包 → Bulk 瘦文档；换 module 复用同一包侧写  
+- **全文**：再取同包，用行字段匹配；不写 ES；不做 logId/fileUri 回源  
 - 见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) §1 / §3 / §5  
 
 完整方案见该文档。
 
 ### I5. 本项目相关的 Node.js 面试题（日志冷热查询）
 
-详见分册 [02-interview-qa.md](./02-interview-qa.md) **I5（N1～N12）**：singleflight/Redis 锁、Bulk 瘦文档、首屏快返、warm 状态、换 module、event loop、超时预算、连接池、全文不写 ES、观测等。  
-架构正文见 [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) §2.2.1 / §3.3。
+> 场景锚点：Node 做 Log Query API；HDFS=`userId→最近一次上报`；ES=列表瘦索引；Redis=warm/锁。
+
+#### N1. 为什么用 Node 做这个查询服务？有什么风险？
+
+**参考答**：  
+适合 IO 密集（等 HDFS / ES / Redis）。风险：单线程 event loop，JSON 解析大包、同步压缩会堵全进程；多实例下内存 Map 锁不够。  
+对策：流式解析、Worker 卸 CPU、超时、连接池、Redis 分布式锁。
+
+#### N2. 同一 userId 多人同时查冷数据，Node 怎么防惊群？（含实现）
+
+**参考答（口述）**：  
+进程内 `Map` singleflight（同 `userId+uploadId` 共用 Promise）+ Redis `SET NX` 回填锁；首屏可共享；Bulk 异步。只靠进程内 Map 在多 Pod 下无效。
+
+**实现要点（两层合流）**：
+
+```text
+层1 进程内：inflight Map —— 同 key 的 await 都挂在同一个 Promise 上
+层2 跨进程：Redis SET key NX EX —— 只有一个 Pod 真去拉 HDFS/Bulk
+```
+
+```js
+// --- singleflight：多人共用一次执行结果 ---
+const inflight = new Map();
+
+function singleflight(key, fn) {
+  const hit = inflight.get(key);
+  if (hit) return hit;                 // B、C 直接拿 A 的 Promise
+
+  const p = (async () => {
+    try {
+      return await fn();               // 只有第一个进来的跑 fn
+    } finally {
+      inflight.delete(key);            // 必须删，否则泄漏 / 永远复用旧 Promise
+    }
+  })();
+
+  inflight.set(key, p);
+  return p;
+}
+
+// --- 冷回填：同 userId+uploadId 只拉包一次 ---
+async function ensureBackfill(userId, uploadId, doWork) {
+  const key = `bf:${userId}:${uploadId}`;
+
+  return singleflight(key, async () => {
+    // 跨 Pod：只有一个实例拿到锁
+    const locked = await redis.set(`backfill:${userId}:${uploadId}`, '1', 'EX', 120, 'NX');
+    if (!locked) {
+      // 别人在灌：轮询 warm，或短等后再读 ES / 共享方结果
+      await waitUntil(() => redis.get(`warm:${userId}:${uploadId}`), { timeoutMs: 3000 });
+      return { shared: true };
+    }
+    try {
+      const page = await doWork();     // getLatestUpload → 过滤 → 首屏 + 异步 Bulk
+      await redis.set(`warm:${userId}:${uploadId}`, '1', 'EX', 86400);
+      return { page, shared: false };
+    } finally {
+      await redis.del(`backfill:${userId}:${uploadId}`);
+    }
+  });
+}
+```
+
+并发回数据怎么走（冷）：
+
+```text
+T0  A、B、C 同时 miss（同 userId，同 uploadId）
+T1  A 创建 Promise，放进 inflight；B、C get 到同一个 Promise
+T2  A 的 fn：Redis SET NX 成功 → 拉 HDFS → 凑满 page
+T3  A resolve({ page })  → B、C 的 await 一起拿到同一份 page（或自行再 es.search）
+T4  Bulk 可继续异步；warm 点亮后后续请求走 ES
+```
+
+**相同 listKey 只打一次 ES search，多人怎么拿数据**（热路径，同一套路）：
+
+```js
+async function searchOnce(listKey, runSearch) {
+  // 1) 短缓存：已有结果直接返回
+  const cached = await redis.get(`list:${listKey}`);
+  if (cached) return JSON.parse(cached);
+
+  // 2) singleflight：并发只 search 一次
+  return singleflight(`es:${listKey}`, async () => {
+    // 双检，避免等锁期间别人已写入缓存
+    const again = await redis.get(`list:${listKey}`);
+    if (again) return JSON.parse(again);
+
+    const result = await runSearch();          // 真正的 es.search
+    await redis.setex(`list:${listKey}`, 15, JSON.stringify(result));
+    return result;                             // 所有 await 方拿到同一 result
+  });
+}
+
+// 三个并发请求：
+// const r1 = searchOnce(key, () => es.search(...))
+// const r2 = searchOnce(key, () => es.search(...))
+// const r3 = searchOnce(key, () => es.search(...))
+// → 只调用 1 次 es.search；r1/r2/r3 都 resolve 为同一对象（或同等 JSON）
+```
+
+要点：
+
+| 点 | 说明 |
+|----|------|
+| **回传机制** | 不是「推送」，是多个 HTTP handler `await` 同一个 Promise，`resolve` 后各自 `res.json` |
+| **listKey** | 必须含 userId、from、to、module、辅筛、cursor，防串条件/串租户 |
+| **多 Pod** | 仅 Map 时每 Pod 仍可能各打一次 ES → 再加 Redis 锁或依赖短缓存「第二个 Pod 读到 cache」 |
+| **权限** | 缓存与 flight key 都要带 userId |
+
+#### N3. Bulk 瘦文档是什么？为什么不把完整 extra 进 ES？
+
+**参考答**：  
+`toThinDoc` 去掉完整 `extra`，只留时间/模块/file/line/preview/userId；Bulk 一批写入。  
+extra 基数高、体积大，进 ES 会撑爆倒排与 `_source`；列表不需要全文，全文再读 HDFS 包匹配。  
+**作用**：冷→热后列表走 ES filter，不再每次拉包。
+
+#### N4. 首屏如何快速返回？和 Bulk 的关系？
+
+**参考答**：  
+拉最新上报包 → 流式过滤 → **凑满一页先 `return`**；命中行 **异步 enqueueBulk**，不 await 整包进 ES。  
+第二次请求看 Redis `warm:{userId}:{uploadId}`，走 ES。
+
+#### N5. warm / 回填状态为什么放 Redis 不放内存？
+
+**参考答**：  
+多实例要共享「是否已灌、谁在灌」；进程重启不能丢锁导致惊群。key 必须带 `uploadId`，新上报后旧 warm 失效。
+
+#### N6. 用户先查 network 再查 route，Node 侧怎么优化？
+
+**参考答**：  
+同一 `getLatestUpload(userId)` 只拉一次；解析时侧写包内所有 module 瘦文档；当前 module 优先凑页。listKey 含 module，结果缓存不串。
+
+#### N7. event loop 在本场景最容易被什么堵死？
+
+**参考答**：  
+整包同步 `JSON.parse`、大字符串正则脱敏、同步读文件、超大 `JSON.stringify` 响应。  
+改为流式按行 parse、限制 preview 长度、全文单独接口、监控 event loop lag。
+
+#### N8. 如何设计超时预算（对齐 Nginx）？
+
+**参考答**：  
+例：Nginx `proxy_read_timeout` 5s → API 总预算 4s → ES ≤200ms，HDFS 流式首屏尽量短，Bulk 不计入用户路径。客户端断开后回填可改队列异步，避免无限挂起。
+
+#### N9. ES / HDFS 客户端连接要注意什么？
+
+**参考答**：  
+共用带 `keepAlive` 的 Agent；设 `maxSockets`；禁止每请求 `new Client()`；ES 客户端限制重试防故障放大；计入连接池总账。
+
+#### N10. 展开全文时 Node 做什么、不做什么？
+
+**参考答**：  
+再取（或缓存）该 user 最新包，用列表行字段匹配返回 `extra`。  
+**不** `es.index` 全文、**不**用 logId/fileUri。同包展开可 singleflight，并按 user 限流。
+
+#### N11. 如何观测这套 Node 服务？
+
+**参考答**：  
+`event_loop_lag`、heap、HDFS/ES RT与错误率、`backfill_inflight`、warm 命中率、Bulk 429、列表 P99；日志带 `request_id`（透传 Nginx）。
+
+#### N12. 手写一段 singleflight + Redis 锁的思路（口述即可）
+
+**参考答**：  
+`inflight.get(key) ?? 创建 Promise`；Promise 内 `SET key NX EX`；拿到锁则拉包/Bulk/SET warm；否则 sleep 轮询 warm；`finally` 删除 inflight 与锁。key=`userId:uploadId`。
 
 ---
 
@@ -3887,5 +5225,5 @@ Goroutine / Machine / Processor 调度模型；信道与锁的选择；不要为
 # 附录：合并说明
 
 - 本文为拆分笔记的合并副本，便于复制到飞书/Notion/本地。
-- 日志冷热专项见独立文件 `10-log-cold-hot-es-nginx.md`（未并入，以免主题过宽）。
-- 若与分册冲突，以各分册最新内容为准；可用脚本重新生成本文件。
+- 若与分册冲突，以各分册最新内容为准；可重新运行合并脚本生成。
+- PART 顺序：01 → 11/12（L0 加深）→ 03～09 → 10（日志专项）→ 02（面试）。

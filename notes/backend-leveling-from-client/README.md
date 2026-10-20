@@ -6,7 +6,7 @@
 
 | 文档 | 说明 |
 |------|------|
-| [00-full-copy-pack.md](./00-full-copy-pack.md) | **完整可复制合集**：展开 01 内全部链接（主攻略 + L0～L5 详解 + 面试题） |
+| [00-full-copy-pack.md](./00-full-copy-pack.md) | **完整可复制合集**：01 + HTTP/Node L0 + 最小栈 + L1～L5 + 日志冷热 + 面试题 |
 | [01-leveling-guide.md](./01-leveling-guide.md) | 后端开发练级路线（L0→L5）+ 专栏对照 + 实践项目 |
 | [02-interview-qa.md](./02-interview-qa.md) | 后端面试题与参考答案（含日志场景 I4 + **Node.js 专项 I5**） |
 | [03-minimal-backend-stack.md](./03-minimal-backend-stack.md) | L0 最小后端栈详解（路由/配置/日志/探活/Docker） |
@@ -18,6 +18,7 @@
 | [09-l5-architecture-and-growth.md](./09-l5-architecture-and-growth.md) | L5 架构进阶与高手成长（微服务/SLO/设计文档） |
 | [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) | 日志冷热（query=userId+时间+module；HDFS=userId→最近一次上报；无 logId/fileUri） |
 | [11-http-server-nodejs.md](./11-http-server-nodejs.md) | L0 HTTP 服务端视角详解 + Node.js 落地（方法/状态码/Header/幂等中间件） |
+| [12-l0-nodejs-interview.md](./12-l0-nodejs-interview.md) | L0 Node.js 面试向详解（事件循环/异步/中间件/进程与连接池/速答） |
 
 ## 适合谁
 

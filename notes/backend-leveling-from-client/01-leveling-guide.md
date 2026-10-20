@@ -91,9 +91,9 @@
 2. **选一门后端主语言（建议三选一）**  
    - **Go**：部署简单、并发模型清晰，适合服务端入门（专栏对 Go/Docker 有专门讨论）  
    - **Java / Kotlin**：生态全（Spring），面试与大厂后端岗位覆盖广  
-   - **Node / TypeScript**：若你来自 RN/前端，迁移成本最低，但要补强类型与并发边界  
+   - **Node / TypeScript**：若你来自 RN/前端，迁移成本最低，但要补强类型与并发边界（**面试向详解**：[12-l0-nodejs-interview.md](./12-l0-nodejs-interview.md)）  
 
-   《练级攻略》偏 Java 作为工业级主语言；**客户端转后端可优先 Go 或 Kotlin**，降低心智切换成本，同时保持服务端就业面。
+   《练级攻略》偏 Java 作为工业级主语言；**客户端转后端可优先 Go 或 Kotlin**；若选 Node，按 12 补齐事件循环、中间件、连接池与幂等话术。
 
 3. **最小后端栈**（详解见 [03-minimal-backend-stack.md](./03-minimal-backend-stack.md)）  
    - **Web 框架 + 路由**：Method+Path → Handler；中间件链 ≈ 客户端拦截器；统一 JSON 错误  
