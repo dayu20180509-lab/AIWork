@@ -38,8 +38,13 @@ AIWork/
 ├── prompts/            # prompt 模板集合
 ├── snippets/           # 可复用代码片段
 ├── notes/              # 学习笔记 / 调研记录
+│   └── backend-leveling-from-client/  # 客户端转后端练级 + 面试题
 └── templates/          # 项目/脚本模板
 ```
+
+## 精选笔记
+
+- [客户端转后端：练级文档与面试手册](notes/backend-leveling-from-client/README.md) — 参考《左耳听风》体系，从客户端视角梳理后端 L0–L5 路线与面试题
 
 ## 工作流
 
