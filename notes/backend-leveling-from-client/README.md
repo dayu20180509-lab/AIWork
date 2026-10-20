@@ -16,7 +16,7 @@
 | [07-l3-design-and-paradigms.md](./07-l3-design-and-paradigms.md) | L3 软件设计与编程范式（原则/分层/错误/重构） |
 | [08-l4-distributed-resilience-performance.md](./08-l4-distributed-resilience-performance.md) | L4 分布式、弹力与性能（秒杀/演练） |
 | [09-l5-architecture-and-growth.md](./09-l5-architecture-and-growth.md) | L5 架构进阶与高手成长（微服务/SLO/设计文档） |
-| [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) | 日志冷热（列表 query=userId+时间+module；无 logId；全文 fileUri→HDFS；miss→ES 瘦文档） |
+| [10-log-cold-hot-es-nginx.md](./10-log-cold-hot-es-nginx.md) | 日志冷热（query=userId+时间+module；HDFS=userId→最近一次上报；无 logId/fileUri） |
 
 ## 适合谁
 
